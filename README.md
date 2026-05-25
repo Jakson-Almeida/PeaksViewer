@@ -107,4 +107,4 @@ python peaks_viewer.py
 
 ## Licença
 
-Sem licença especificada.
+Distribuído sob a [Licença MIT](LICENSE) © 2026 Jakson Almeida.
