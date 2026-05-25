@@ -214,6 +214,13 @@ def ler_dados_arquivo(caminho_arquivo):
     y_unit = metadata.get("YAxisUnit", "").lower()
     y_is_db = y_unit in ("db", "dbm", "dbw")
 
+    # Heurística para arquivos sem cabeçalho: intensidade linear física é
+    # não-negativa, então valores predominantemente negativos indicam dB
+    # (ex.: .txt cru exportado de OSAs ThorLabs com dBm).
+    if not y_is_db and int_arr.size > 0:
+        if np.median(int_arr) < 0 or float(np.mean(int_arr < 0)) > 0.7:
+            y_is_db = True
+
     return wl_nm.tolist(), int_arr.tolist(), y_is_db
 
 
@@ -339,7 +346,7 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
     ax.set_xlim(wl_nm.min(), wl_nm.max())
     ymin, ymax = np.nanmin(spec_plot), np.nanmax(spec_plot)
     margin = (ymax - ymin) * 0.05 if ymax > ymin else 1.0
-    if in_log_scale:
+    if in_log_scale or ymin < 0:
         ax.set_ylim(ymin - margin, ymax + margin)
     else:
         ax.set_ylim(max(0, ymin - margin), ymax + margin)
