@@ -24,6 +24,17 @@ from matplotlib.figure import Figure
 from matplotlib.collections import PolyCollection
 from matplotlib.widgets import SpanSelector
 import os
+import sys
+
+
+def _resource_path(rel_path):
+    """
+    Caminho absoluto para um recurso (ícone, etc.), funcionando tanto rodando
+    pelo script quanto a partir de um executável empacotado com PyInstaller
+    (``--onefile`` extrai para ``sys._MEIPASS``).
+    """
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel_path)
 
 
 def wavelength_to_rgb(wavelength, gamma=0.8, dark=False):
@@ -370,6 +381,19 @@ def main():
     root.title("Visualizador de Espectros e Picos")
     root.geometry("900x550")
     root.minsize(700, 450)
+
+    # Ícone da janela: tenta .ico (Windows nativo), depois .png como fallback.
+    # Silencioso se ambos falharem — o app continua funcionando sem ícone custom.
+    try:
+        ico = _resource_path(os.path.join("assets", "logo.ico"))
+        if os.path.exists(ico):
+            root.iconbitmap(default=ico)
+        else:
+            png = _resource_path(os.path.join("assets", "logo.png"))
+            if os.path.exists(png):
+                root.iconphoto(True, tk.PhotoImage(file=png))
+    except Exception:
+        pass
 
     # Dados: lista de (caminho, wl_nm, spec, y_is_db)
     spectra_data = []
