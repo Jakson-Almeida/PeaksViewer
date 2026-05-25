@@ -25,6 +25,8 @@ from matplotlib.collections import PolyCollection
 from matplotlib.widgets import SpanSelector
 import os
 import sys
+import json
+from pathlib import Path
 
 
 def _resource_path(rel_path):
@@ -35,6 +37,99 @@ def _resource_path(rel_path):
     """
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel_path)
+
+
+# ----------------------------------------------------------------------------
+#  Persistência de configurações (settings.json)
+# ----------------------------------------------------------------------------
+
+def _settings_path():
+    """Local do arquivo de configurações (~/.peaksviewer/settings.json)."""
+    base = Path.home() / ".peaksviewer"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Fallback: ao lado do script/exe se HOME não for gravável
+        base = Path(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
+    return base / "settings.json"
+
+
+def _default_settings():
+    """Configurações padrão de fábrica."""
+    return {
+        "ui_visibility": {
+            "navigation": True,
+            "peaks": True,
+            "gradient": True,
+            "power_db": True,
+            "fit_curve": True,
+            "prominence": True,
+            "copy_buttons": True,
+        },
+        "defaults": {
+            "show_peaks": False,
+            "show_gradient": False,
+            "show_power_db": False,
+            "fit_curve_enabled": False,
+            "fit_model": "gaussian",
+            "auto_enable_db_when_detected": True,
+        },
+        "appearance": {
+            "dark_theme": False,
+            "window_geometry": "900x550",
+        },
+    }
+
+
+def _merge_settings(loaded, defaults):
+    """
+    Mescla ``loaded`` em cima de ``defaults`` mantendo apenas chaves conhecidas
+    e validando o tipo de cada campo. Garante que um arquivo de settings
+    parcialmente desatualizado/quebrado não derrube a aplicação.
+    """
+    out = {}
+    for section, default_section in defaults.items():
+        if isinstance(default_section, dict):
+            sec = dict(default_section)
+            loaded_section = loaded.get(section) if isinstance(loaded, dict) else None
+            if isinstance(loaded_section, dict):
+                for k, default_v in default_section.items():
+                    if k in loaded_section:
+                        v = loaded_section[k]
+                        if isinstance(default_v, bool) and isinstance(v, bool):
+                            sec[k] = v
+                        elif isinstance(default_v, (int, float)) and isinstance(v, (int, float)) and not isinstance(v, bool):
+                            sec[k] = type(default_v)(v)
+                        elif isinstance(default_v, str) and isinstance(v, str):
+                            sec[k] = v
+            out[section] = sec
+        else:
+            out[section] = default_section
+    return out
+
+
+def _load_settings():
+    """Carrega settings.json (mesclando com os defaults). Nunca lança exceção."""
+    path = _settings_path()
+    defaults = _default_settings()
+    if not path.exists():
+        return defaults
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return _merge_settings(json.load(f), defaults)
+    except Exception:
+        return defaults
+
+
+def _save_settings(settings):
+    """Persiste settings.json. Retorna True em sucesso, False caso contrário."""
+    try:
+        path = _settings_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
 
 
 def wavelength_to_rgb(wavelength, gamma=0.8, dark=False):
@@ -376,10 +471,172 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
         ax.set_ylim(max(0, ymin - margin), ymax + margin)
 
 
+def _abrir_modal_configuracoes(root, settings, on_apply):
+    """
+    Modal de Configurações. Edita ``settings`` in-place quando o usuário salva,
+    persiste em ``settings.json`` e dispara ``on_apply()`` para o chamador
+    aplicar mudanças vivas (visibilidade da toolbar, tema, geometria).
+
+    Estados iniciais (aba "Comportamento") são apenas persistidos — passam a
+    valer no próximo arranque, não interferem na sessão atual.
+    """
+    modal = tk.Toplevel(root)
+    modal.title("Configurações")
+    modal.transient(root)
+    modal.grab_set()
+    modal.geometry("560x460")
+    modal.minsize(480, 380)
+
+    nb = ttk.Notebook(modal)
+    nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
+
+    # ----- Tab 1: Interface (visibilidade) -----
+    tab_iface = ttk.Frame(nb)
+    nb.add(tab_iface, text="Interface")
+
+    ttk.Label(
+        tab_iface,
+        text="Mostrar/ocultar grupos de controles na barra superior:",
+        foreground="gray",
+    ).pack(anchor=tk.W, padx=12, pady=(12, 4))
+
+    visibility_vars = {}
+    for key, label in [
+        ("navigation", "Botões de navegação (Anterior / Próximo)"),
+        ("peaks", "Checkbox \"Exibir picos\""),
+        ("gradient", "Checkbox \"Gradiente de cores\""),
+        ("power_db", "Checkbox \"Potência (dB)\""),
+        ("fit_curve", "Ajuste de curva (checkbox + modelo + Limpar seleção)"),
+        ("prominence", "Spinbox de Prominência"),
+        ("copy_buttons", "Botões Copiar λ / Copiar I"),
+    ]:
+        v = tk.BooleanVar(value=settings["ui_visibility"].get(key, True))
+        visibility_vars[key] = v
+        ttk.Checkbutton(tab_iface, text=label, variable=v).pack(anchor=tk.W, padx=24, pady=2)
+
+    # ----- Tab 2: Comportamento (defaults) -----
+    tab_def = ttk.Frame(nb)
+    nb.add(tab_def, text="Comportamento")
+
+    ttk.Label(
+        tab_def,
+        text="Estados iniciais (aplicados ao abrir o programa):",
+        foreground="gray",
+    ).pack(anchor=tk.W, padx=12, pady=(12, 4))
+
+    default_vars = {}
+    for key, label in [
+        ("show_peaks", "Iniciar com \"Exibir picos\" ligado"),
+        ("show_gradient", "Iniciar com \"Gradiente de cores\" ligado"),
+        ("show_power_db", "Iniciar com \"Potência (dB)\" ligado"),
+        ("fit_curve_enabled", "Iniciar com \"Ajustar curva\" ligado"),
+    ]:
+        v = tk.BooleanVar(value=settings["defaults"].get(key, False))
+        default_vars[key] = v
+        ttk.Checkbutton(tab_def, text=label, variable=v).pack(anchor=tk.W, padx=24, pady=2)
+
+    fr_model = ttk.Frame(tab_def)
+    fr_model.pack(anchor=tk.W, padx=24, pady=(8, 2), fill=tk.X)
+    ttk.Label(fr_model, text="Modelo de ajuste padrão:").pack(side=tk.LEFT)
+    var_fit_model = tk.StringVar(value=settings["defaults"].get("fit_model", "gaussian"))
+    ttk.Combobox(fr_model, textvariable=var_fit_model,
+                 values=["gaussian", "lorentzian"], state="readonly", width=14).pack(side=tk.LEFT, padx=(8, 0))
+
+    ttk.Separator(tab_def, orient="horizontal").pack(fill=tk.X, padx=12, pady=10)
+
+    ttk.Label(tab_def, text="Comportamentos automáticos:", foreground="gray").pack(anchor=tk.W, padx=12, pady=(0, 4))
+    var_auto_db = tk.BooleanVar(value=settings["defaults"].get("auto_enable_db_when_detected", True))
+    ttk.Checkbutton(
+        tab_def,
+        text="Auto-ativar \"Potência (dB)\" ao carregar dados em escala dB",
+        variable=var_auto_db,
+    ).pack(anchor=tk.W, padx=24, pady=2)
+
+    # ----- Tab 3: Aparência -----
+    tab_apa = ttk.Frame(nb)
+    nb.add(tab_apa, text="Aparência")
+
+    var_dark = tk.BooleanVar(value=settings["appearance"].get("dark_theme", False))
+    ttk.Checkbutton(tab_apa, text="Tema escuro (gráfico)", variable=var_dark).pack(anchor=tk.W, padx=24, pady=(16, 4))
+
+    fr_geom = ttk.Frame(tab_apa)
+    fr_geom.pack(anchor=tk.W, padx=24, pady=(8, 4), fill=tk.X)
+    ttk.Label(fr_geom, text="Tamanho inicial da janela (LarguraxAltura):").pack(side=tk.LEFT)
+    var_geom = tk.StringVar(value=settings["appearance"].get("window_geometry", "900x550"))
+    ttk.Entry(fr_geom, textvariable=var_geom, width=14).pack(side=tk.LEFT, padx=(8, 0))
+
+    ttk.Label(
+        tab_apa,
+        text=f"Arquivo de configuração: {_settings_path()}",
+        foreground="gray",
+        wraplength=520,
+        justify=tk.LEFT,
+    ).pack(anchor=tk.W, padx=12, pady=(20, 4))
+
+    # ----- Botões inferiores -----
+    fr_btn = ttk.Frame(modal)
+    fr_btn.pack(fill=tk.X, padx=10, pady=(4, 10))
+
+    def restaurar_padroes():
+        defaults = _default_settings()
+        for k, v in visibility_vars.items():
+            v.set(defaults["ui_visibility"][k])
+        for k, v in default_vars.items():
+            v.set(defaults["defaults"][k])
+        var_fit_model.set(defaults["defaults"]["fit_model"])
+        var_auto_db.set(defaults["defaults"]["auto_enable_db_when_detected"])
+        var_dark.set(defaults["appearance"]["dark_theme"])
+        var_geom.set(defaults["appearance"]["window_geometry"])
+
+    def salvar_e_aplicar():
+        # Atualiza ``settings`` in-place
+        for k, v in visibility_vars.items():
+            settings["ui_visibility"][k] = bool(v.get())
+        for k, v in default_vars.items():
+            settings["defaults"][k] = bool(v.get())
+        settings["defaults"]["fit_model"] = var_fit_model.get()
+        settings["defaults"]["auto_enable_db_when_detected"] = bool(var_auto_db.get())
+        settings["appearance"]["dark_theme"] = bool(var_dark.get())
+        # Validação simples para a geometria (ex.: "900x550")
+        geom_txt = var_geom.get().strip()
+        if "x" in geom_txt:
+            try:
+                w, h = geom_txt.lower().split("x", 1)
+                int(w); int(h)
+                settings["appearance"]["window_geometry"] = f"{int(w)}x{int(h)}"
+            except ValueError:
+                pass
+
+        # Aplica geometria imediatamente (apenas largura/altura — nunca move a janela)
+        try:
+            root.geometry(settings["appearance"]["window_geometry"])
+        except Exception:
+            pass
+
+        ok = _save_settings(settings)
+        if not ok:
+            messagebox.showwarning(
+                "Configurações",
+                "Não foi possível gravar settings.json — alterações aplicadas apenas nesta sessão.",
+            )
+
+        on_apply()
+        modal.destroy()
+
+    ttk.Button(fr_btn, text="Restaurar padrões", command=restaurar_padroes).pack(side=tk.LEFT)
+    ttk.Button(fr_btn, text="Cancelar", command=modal.destroy).pack(side=tk.RIGHT)
+    ttk.Button(fr_btn, text="Salvar e aplicar", command=salvar_e_aplicar).pack(side=tk.RIGHT, padx=(0, 6))
+
+    modal.bind("<Escape>", lambda e: modal.destroy())
+    modal.wait_window()
+
+
 def main():
+    settings = _load_settings()
+
     root = tk.Tk()
     root.title("Visualizador de Espectros e Picos")
-    root.geometry("900x550")
+    root.geometry(settings["appearance"].get("window_geometry", "900x550"))
     root.minsize(700, 450)
 
     # Ícone da janela: tenta .ico (Windows nativo), depois .png como fallback.
@@ -400,12 +657,14 @@ def main():
     current_index = 0
     prominence = 5.0
     last_spec_range = 0.0  # range do spec_eff na última recalculação (escala atual)
-    show_peaks = False  # Por padrão picos desabilitados
-    show_gradient = False  # Por padrão gradiente desabilitado
-    show_power_db = False  # Por padrão intensidade linear (não dB)
-    fit_curve_enabled = False  # Ajuste de curva desabilitado por padrão
-    fit_model = "gaussian"  # Modelo padrão: "gaussian" ou "lorentzian"
-    dark_theme = False
+    # Estados iniciais vêm de settings["defaults"]; o usuário ajusta via toolbar
+    # e configura novos defaults pelo modal "Configurações".
+    show_peaks = bool(settings["defaults"].get("show_peaks", False))
+    show_gradient = bool(settings["defaults"].get("show_gradient", False))
+    show_power_db = bool(settings["defaults"].get("show_power_db", False))
+    fit_curve_enabled = bool(settings["defaults"].get("fit_curve_enabled", False))
+    fit_model = str(settings["defaults"].get("fit_model", "gaussian"))
+    dark_theme = bool(settings["appearance"].get("dark_theme", False))
     last_clicked_wl = None  # último pico clicado (para copiar)
     last_clicked_int = None
     fit_info = None  # Informações do ajuste: (modelo, params, r², fwhm)
@@ -456,9 +715,13 @@ def main():
         current_index = 0
 
         # Auto-ativa "Potência (dB)" quando algum arquivo já vem em escala log
-        # (ex.: ThorLabs FTS com #YAxisUnit;dBm). Se todos forem lineares, deixa
-        # a opção como o usuário a configurou.
-        if any(s[3] for s in spectra_data) and not show_power_db:
+        # (ex.: ThorLabs FTS com #YAxisUnit;dBm). Pode ser desabilitado em
+        # Configurações → Comportamento.
+        if (
+            settings["defaults"].get("auto_enable_db_when_detected", True)
+            and any(s[3] for s in spectra_data)
+            and not show_power_db
+        ):
             show_power_db = True
             var_show_power_db.set(True)
 
@@ -720,102 +983,81 @@ def main():
     # Botões e controles
     fr_btn = ttk.Frame(root, padding=4)
     fr_btn.pack(fill=tk.X, padx=8, pady=4)
-    ttk.Button(fr_btn, text="Carregar arquivo(s)...", command=carregar_arquivos).pack(side=tk.LEFT, padx=(0, 8))
-    ttk.Button(fr_btn, text="< Anterior", command=anterior).pack(side=tk.LEFT, padx=2)
-    ttk.Button(fr_btn, text="Próximo >", command=proximo).pack(side=tk.LEFT, padx=2)
-    #tk.Label(fr_btn, text="Navegação: ← →  |  < >  |  − +  |  Page Up/Down", fg="gray").pack(side=tk.LEFT, padx=12)
 
-    # Exibir picos (por padrão desligado)
+    # Toolbar é construída como uma lista ordenada de widgets para permitir
+    # mostrar/ocultar grupos a partir do modal Configurações sem perder a ordem.
+    toolbar_layout = []  # lista de tuplas: (group_key|None, widget, pack_kwargs)
+
+    btn_carregar = ttk.Button(fr_btn, text="Carregar arquivo(s)...", command=carregar_arquivos)
+    toolbar_layout.append((None, btn_carregar, dict(side=tk.LEFT, padx=(0, 8))))
+
+    btn_anterior = ttk.Button(fr_btn, text="< Anterior", command=anterior)
+    btn_proximo = ttk.Button(fr_btn, text="Próximo >", command=proximo)
+    toolbar_layout.append(("navigation", btn_anterior, dict(side=tk.LEFT, padx=2)))
+    toolbar_layout.append(("navigation", btn_proximo, dict(side=tk.LEFT, padx=2)))
+
+    # Exibir picos
     def toggle_peaks():
         nonlocal show_peaks
         show_peaks = var_show_peaks.get()
         atualizar_grafico()
 
-    var_show_peaks = tk.BooleanVar(value=False)
-    chk_peaks = ttk.Checkbutton(
-        fr_btn,
-        text="Exibir picos",
-        variable=var_show_peaks,
-        command=toggle_peaks,
-    )
-    chk_peaks.pack(side=tk.LEFT, padx=(16, 4))
+    var_show_peaks = tk.BooleanVar(value=show_peaks)
+    chk_peaks = ttk.Checkbutton(fr_btn, text="Exibir picos", variable=var_show_peaks, command=toggle_peaks)
+    toolbar_layout.append(("peaks", chk_peaks, dict(side=tk.LEFT, padx=(16, 4))))
 
-    # Gradiente de cores (por padrão desligado)
+    # Gradiente de cores
     def toggle_gradient():
         nonlocal show_gradient
         show_gradient = var_show_gradient.get()
         atualizar_grafico()
 
-    var_show_gradient = tk.BooleanVar(value=False)
-    chk_gradient = ttk.Checkbutton(
-        fr_btn,
-        text="Gradiente de cores",
-        variable=var_show_gradient,
-        command=toggle_gradient,
-    )
-    chk_gradient.pack(side=tk.LEFT, padx=(8, 4))
+    var_show_gradient = tk.BooleanVar(value=show_gradient)
+    chk_gradient = ttk.Checkbutton(fr_btn, text="Gradiente de cores", variable=var_show_gradient, command=toggle_gradient)
+    toolbar_layout.append(("gradient", chk_gradient, dict(side=tk.LEFT, padx=(8, 4))))
 
-    # Potência em dB (por padrão False)
+    # Potência em dB
     def toggle_power_db():
         nonlocal show_power_db
         show_power_db = var_show_power_db.get()
-        # Rescala prominência proporcionalmente para a nova escala (dB ↔ linear)
         _recalc_prominence(force_default=False)
         atualizar_grafico()
 
-    var_show_power_db = tk.BooleanVar(value=False)
-    chk_power_db = ttk.Checkbutton(
-        fr_btn,
-        text="Potência (dB)",
-        variable=var_show_power_db,
-        command=toggle_power_db,
-    )
-    chk_power_db.pack(side=tk.LEFT, padx=(8, 4))
+    var_show_power_db = tk.BooleanVar(value=show_power_db)
+    chk_power_db = ttk.Checkbutton(fr_btn, text="Potência (dB)", variable=var_show_power_db, command=toggle_power_db)
+    toolbar_layout.append(("power_db", chk_power_db, dict(side=tk.LEFT, padx=(8, 4))))
 
-    # Ajuste de curva gaussiana/lorentziana
+    # Ajuste de curva gaussiana/lorentziana + combobox + limpar seleção
     def toggle_fit():
         nonlocal fit_curve_enabled
         fit_curve_enabled = var_fit_curve.get()
         atualizar_grafico()
 
-    var_fit_curve = tk.BooleanVar(value=False)
-    chk_fit = ttk.Checkbutton(
-        fr_btn,
-        text="Ajustar curva",
-        variable=var_fit_curve,
-        command=toggle_fit,
-    )
-    chk_fit.pack(side=tk.LEFT, padx=(8, 4))
+    var_fit_curve = tk.BooleanVar(value=fit_curve_enabled)
+    chk_fit = ttk.Checkbutton(fr_btn, text="Ajustar curva", variable=var_fit_curve, command=toggle_fit)
+    toolbar_layout.append(("fit_curve", chk_fit, dict(side=tk.LEFT, padx=(8, 4))))
 
-    # Modelo de ajuste (Gaussiana ou Lorentziana)
     def change_fit_model(event=None):
         nonlocal fit_model
         fit_model = fit_model_var.get()
-        
         if fit_curve_enabled:
             atualizar_grafico()
 
-    fit_model_var = tk.StringVar(value="gaussian")
-    combo_model = ttk.Combobox(
-        fr_btn,
-        textvariable=fit_model_var,
-        values=["gaussian", "lorentzian"],
-        state="readonly",
-        width=10,
-    )
-    combo_model.pack(side=tk.LEFT, padx=2)
+    fit_model_var = tk.StringVar(value=fit_model)
+    combo_model = ttk.Combobox(fr_btn, textvariable=fit_model_var,
+                                values=["gaussian", "lorentzian"], state="readonly", width=10)
     combo_model.bind("<<ComboboxSelected>>", change_fit_model)
+    toolbar_layout.append(("fit_curve", combo_model, dict(side=tk.LEFT, padx=2)))
 
-    # Botão para limpar seleção de região
     def limpar_selecao():
         nonlocal selected_range
         selected_range = None
         atualizar_grafico()
 
     btn_limpar_selecao = ttk.Button(fr_btn, text="Limpar seleção", command=limpar_selecao)
-    btn_limpar_selecao.pack(side=tk.LEFT, padx=2)
+    toolbar_layout.append(("fit_curve", btn_limpar_selecao, dict(side=tk.LEFT, padx=2)))
 
-    # Sensibilidade (prominência): valor maior = menos picos (filtra ruído)
+    # Sensibilidade (prominência)
     def on_prominence_change(val=None):
         nonlocal prominence
         if val is None:
@@ -825,31 +1067,65 @@ def main():
             prominence = max(0.0, p)
             prominence_var.set(prominence)
         except (ValueError, tk.TclError):
-            # Em caso de entrada inválida, volta ao default da escala atual
             _recalc_prominence(force_default=True)
             return
         if show_peaks:
             atualizar_grafico()
 
-    tk.Label(fr_btn, text="Prominência:", fg="gray").pack(side=tk.LEFT, padx=(8, 2))
-    prominence_var = tk.DoubleVar(value=5.0)
-    spin_prominence = ttk.Spinbox(
-        fr_btn,
-        from_=0.5,
-        to=200.0,
-        increment=0.5,
-        textvariable=prominence_var,
-        width=6,
-        command=on_prominence_change,
-    )
-    spin_prominence.pack(side=tk.LEFT, padx=2)
+    lbl_prominence = tk.Label(fr_btn, text="Prominência:", fg="gray")
+    prominence_var = tk.DoubleVar(value=prominence)
+    spin_prominence = ttk.Spinbox(fr_btn, from_=0.5, to=200.0, increment=0.5,
+                                   textvariable=prominence_var, width=6,
+                                   command=on_prominence_change)
     spin_prominence.bind("<Return>", lambda e: on_prominence_change())
     spin_prominence.bind("<FocusOut>", lambda e: on_prominence_change())
+    toolbar_layout.append(("prominence", lbl_prominence, dict(side=tk.LEFT, padx=(8, 2))))
+    toolbar_layout.append(("prominence", spin_prominence, dict(side=tk.LEFT, padx=2)))
 
-    # Copiar λ ou intensidade do último pico clicado
-    tk.Label(fr_btn, text="Pico:", fg="gray").pack(side=tk.LEFT, padx=(12, 2))
-    ttk.Button(fr_btn, text="Copiar λ", command=copiar_lambda).pack(side=tk.LEFT, padx=2)
-    ttk.Button(fr_btn, text="Copiar I", command=copiar_intensidade).pack(side=tk.LEFT, padx=2)
+    # Copiar λ / I
+    lbl_copiar = tk.Label(fr_btn, text="Pico:", fg="gray")
+    btn_copiar_lambda = ttk.Button(fr_btn, text="Copiar λ", command=copiar_lambda)
+    btn_copiar_int = ttk.Button(fr_btn, text="Copiar I", command=copiar_intensidade)
+    toolbar_layout.append(("copy_buttons", lbl_copiar, dict(side=tk.LEFT, padx=(12, 2))))
+    toolbar_layout.append(("copy_buttons", btn_copiar_lambda, dict(side=tk.LEFT, padx=2)))
+    toolbar_layout.append(("copy_buttons", btn_copiar_int, dict(side=tk.LEFT, padx=2)))
+
+    def aplicar_visibilidade_toolbar():
+        """Repacka a toolbar respeitando settings['ui_visibility']."""
+        for _grp, w, _kw in toolbar_layout:
+            try:
+                w.pack_forget()
+            except Exception:
+                pass
+        try:
+            btn_configuracoes.pack_forget()
+        except Exception:
+            pass
+        # Botão de Configurações sempre visível, ancorado à direita
+        btn_configuracoes.pack(side=tk.RIGHT, padx=(8, 0))
+        for grp, w, kwargs in toolbar_layout:
+            if grp is None or settings["ui_visibility"].get(grp, True):
+                w.pack(**kwargs)
+
+    def abrir_configuracoes():
+        _abrir_modal_configuracoes(
+            root, settings,
+            on_apply=lambda: (
+                aplicar_settings_runtime(),
+                aplicar_visibilidade_toolbar(),
+                atualizar_grafico(),
+            ),
+        )
+
+    def aplicar_settings_runtime():
+        """Aplica em tempo real os settings que afetam o estado vivo."""
+        nonlocal dark_theme
+        dark_theme = bool(settings["appearance"].get("dark_theme", False))
+
+    btn_configuracoes = ttk.Button(fr_btn, text="⚙ Configurações", command=abrir_configuracoes)
+
+    # Aplica visibilidade inicial conforme settings.json
+    aplicar_visibilidade_toolbar()
 
     # Inicial
     atualizar_grafico()

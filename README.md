@@ -94,6 +94,52 @@ python peaks_viewer.py
 6. Marque **Ajustar curva**, escolha **gaussian** ou **lorentzian** e, opcionalmente, arraste o mouse sobre o gráfico para restringir o ajuste a uma região.
 7. Clique em um pico e use **Copiar λ** ou **Copiar I** para copiar os valores.
 
+## Configurações persistentes
+
+O botão **⚙ Configurações** no canto direito da barra abre um modal com três abas:
+
+- **Interface**: mostra/oculta cada grupo de controles da barra (navegação,
+  picos, gradiente, dB, ajuste de curva, prominência, botões de copiar).
+  Aplicado imediatamente.
+- **Comportamento**: estados iniciais ao abrir o programa (qual checkbox já
+  vem ligado, qual modelo de ajuste padrão), e o auto-ativar de "Potência (dB)"
+  quando dados em escala log são detectados.
+- **Aparência**: tema escuro do gráfico e tamanho inicial da janela.
+
+As preferências são gravadas em **`~/.peaksviewer/settings.json`** (Windows:
+`C:\Users\<você>\.peaksviewer\settings.json`). O botão *Restaurar padrões*
+volta o formulário aos valores de fábrica; *Salvar e aplicar* persiste e
+aplica as mudanças vivas (visibilidade / tema / geometria) sem precisar
+reiniciar.
+
+Exemplo de `settings.json`:
+
+```json
+{
+  "ui_visibility": {
+    "navigation": true,
+    "peaks": true,
+    "gradient": false,
+    "power_db": true,
+    "fit_curve": true,
+    "prominence": true,
+    "copy_buttons": false
+  },
+  "defaults": {
+    "show_peaks": true,
+    "show_gradient": false,
+    "show_power_db": false,
+    "fit_curve_enabled": false,
+    "fit_model": "lorentzian",
+    "auto_enable_db_when_detected": true
+  },
+  "appearance": {
+    "dark_theme": false,
+    "window_geometry": "1024x600"
+  }
+}
+```
+
 ## Atalhos de teclado
 
 | Tecla                  | Ação              |
