@@ -1,5 +1,7 @@
 # PeaksViewer
 
+![PeaksViewer Banner](assets/banner.png)
+
 Visualizador interativo de espectros ópticos com detecção de picos e ajuste de curvas, em Python (Tkinter + Matplotlib).
 
 Permite carregar um ou vários arquivos de espectro (formato `wavelength;intensity`), navegar entre eles com o teclado e analisar picos, larguras (FWHM) e perfis Gaussianos/Lorentzianos.
