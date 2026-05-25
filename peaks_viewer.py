@@ -234,27 +234,56 @@ def detectar_picos(intensidade, prominence=5, valley=False):
     return peaks
 
 
-def _to_db(intensity, ref=None):
-    """Converte intensidade para dB (ref = max se None). Evita log(0) com piso."""
-    arr = np.asarray(intensity, dtype=float)
-    if ref is None:
-        ref = np.max(arr)
-    if ref <= 0:
-        ref = 1.0
-    return 10 * np.log10(np.maximum(arr / ref, 1e-12))
-
-
-def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data=None, fit_wl=None, selected_range=None, power_db=False, y_is_db=False):
+def _efetivar_spec(spec, y_is_db, power_db):
     """
-    Plota espectro em ax. Se show_peaks=True, detecta picos e desenha marcadores.
-    Se show_gradient=True, preenche a área sob a curva com gradiente de cores (λ).
-    Se fit_curve e fit_data são fornecidos, plota a curva ajustada.
-    Se selected_range é fornecido, desenha a região selecionada.
-    Se ``y_is_db`` é True, os dados já estão em escala logarítmica (dBm/dB) e o
-    eixo Y é tratado em consequência: por padrão exibe os valores absolutos
-    (dBm) e, com ``power_db=True``, normaliza ao pico (0 dB no máximo).
-    Para dados lineares, ``power_db=True`` converte para dB relativo ao máximo.
-    Limpa marcadores antigos em ax (ax.markers e ax.marker).
+    Converte o espectro armazenado para a escala efetivamente em uso.
+
+    Single source of truth: o resultado é usado para o plot, detecção de picos,
+    ajuste de curva e valores copiados — assim o toggle "Potência (dB)" se
+    comporta como um verdadeiro alternador dB ↔ linear sem alterar o arquivo.
+
+    Combinações:
+      - y_is_db=True,  power_db=True  → dB rel. ao pico (spec − max(spec))
+      - y_is_db=True,  power_db=False → linear, convertido de dB (10^(spec/10))
+      - y_is_db=False, power_db=True  → dB rel. ao pico (10·log10(spec/max))
+      - y_is_db=False, power_db=False → linear cru (spec)
+    """
+    arr = np.asarray(spec, dtype=float)
+    if arr.size == 0:
+        return arr
+    if y_is_db:
+        if power_db:
+            return arr - float(np.max(arr))
+        return np.power(10.0, arr / 10.0)
+    if power_db:
+        ref = float(np.max(arr))
+        if ref <= 0:
+            ref = 1.0
+        return 10.0 * np.log10(np.maximum(arr / ref, 1e-12))
+    return arr
+
+
+def _ylabel_para_escala(y_is_db, power_db):
+    """Rótulo do eixo Y para a escala efetiva atual."""
+    if power_db:
+        return "Potência (dB, rel. ao pico)"
+    if y_is_db:
+        return "Intensidade linear (convertida de dB)"
+    return "Intensidade (u.a.)"
+
+
+def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data_plot=None, fit_wl=None, selected_range=None, power_db=False, y_is_db=False):
+    """
+    Plota o espectro convertido para a escala atualmente em uso (linear ou dB),
+    desenhada por ``_efetivar_spec``.
+
+    O argumento ``spec`` é o vetor armazenado tal como foi lido do arquivo;
+    a conversão para a escala visível acontece aqui dentro. Já ``fit_data_plot``
+    deve vir **já na escala visível** (porque o ajuste de curva é executado
+    sobre ``_efetivar_spec(spec, ...)`` em ``atualizar_grafico``).
+
+    Se ``show_peaks=True``, detecta picos no espectro efetivo (mesma escala do
+    gráfico, então a prominência tem o mesmo significado do que se vê).
     """
     ax.clear()
     color_fg = "white" if dark else "black"
@@ -264,25 +293,9 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
     ax.tick_params(colors=color_fg)
     ax.grid(True)
 
-    if y_is_db:
-        # Dados já em dB: nunca aplicar 10*log10. Apenas normaliza ao pico se pedido.
-        if power_db:
-            ref = float(np.max(spec))
-            spec_plot = np.asarray(spec, dtype=float) - ref
-            fit_data_plot = (np.asarray(fit_data, dtype=float) - ref) if fit_data is not None else None
-            ylabel = "Potência (dB, rel. ao pico)"
-        else:
-            spec_plot = np.asarray(spec, dtype=float)
-            fit_data_plot = np.asarray(fit_data, dtype=float) if fit_data is not None else None
-            ylabel = "Potência (dBm)"
-    else:
-        ref = np.max(spec) if np.max(spec) > 0 else 1.0
-        spec_plot = _to_db(spec, ref) if power_db else np.asarray(spec, dtype=float)
-        fit_data_plot = _to_db(fit_data, ref) if (power_db and fit_data is not None) else fit_data
-        ylabel = "Potência (dB)" if power_db else "Intensidade (u.a.)"
-
-    ax.set_ylabel(ylabel, color=color_fg)
-    in_log_scale = power_db or y_is_db
+    spec_plot = _efetivar_spec(spec, y_is_db, power_db)
+    ax.set_ylabel(_ylabel_para_escala(y_is_db, power_db), color=color_fg)
+    in_log_scale = bool(power_db)
 
     if show_gradient:
         gradient_colors = precompute_gradient(wl_nm, dark=dark)
@@ -329,7 +342,7 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
             pass
 
     if show_peaks:
-        peaks = detectar_picos(spec, prominence=prominence, valley=valley)
+        peaks = detectar_picos(spec_plot, prominence=prominence, valley=valley)
         for idx in peaks:
             wl_p = wl_nm[idx]
             int_p = spec_plot[idx]
@@ -344,8 +357,8 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
             ax.markers.append(marker)
 
     ax.set_xlim(wl_nm.min(), wl_nm.max())
-    ymin, ymax = np.nanmin(spec_plot), np.nanmax(spec_plot)
-    margin = (ymax - ymin) * 0.05 if ymax > ymin else 1.0
+    ymin, ymax = float(np.nanmin(spec_plot)), float(np.nanmax(spec_plot))
+    margin = (ymax - ymin) * 0.05 if ymax > ymin else max(abs(ymax) * 0.05, 1e-12)
     if in_log_scale or ymin < 0:
         ax.set_ylim(ymin - margin, ymax + margin)
     else:
@@ -362,6 +375,7 @@ def main():
     spectra_data = []
     current_index = 0
     prominence = 5.0
+    last_spec_range = 0.0  # range do spec_eff na última recalculação (escala atual)
     show_peaks = False  # Por padrão picos desabilitados
     show_gradient = False  # Por padrão gradiente desabilitado
     show_power_db = False  # Por padrão intensidade linear (não dB)
@@ -424,6 +438,9 @@ def main():
             show_power_db = True
             var_show_power_db.set(True)
 
+        # Reset da prominência default e da faixa do spinbox para a nova escala
+        _recalc_prominence(force_default=True)
+
         status_var.set(f"Carregados {len(spectra_data)} arquivo(s). Navegue com < e > ou setas.")
         atualizar_grafico()
 
@@ -439,18 +456,26 @@ def main():
         idx = max(0, min(current_index, len(spectra_data) - 1))
         path, wl_nm, spec, y_is_db = spectra_data[idx]
         nome = os.path.basename(path)
-        
-        # Filtra dados se houver região selecionada
+
+        # Escala efetiva (linear ou dB) usada por TODOS os cálculos a partir daqui:
+        # plot, picos, ajuste e valores copiados. Quando o usuário alterna o toggle,
+        # tudo recalcula automaticamente sobre a nova escala.
+        spec_eff = _efetivar_spec(spec, y_is_db, show_power_db)
+
+        # Filtra dados se houver região selecionada (ajuste é feito em spec_eff)
         wl_fit = wl_nm
-        spec_fit = spec
+        spec_fit = spec_eff
         if selected_range is not None and fit_curve_enabled:
             wl_min, wl_max = selected_range
             mask = (wl_nm >= wl_min) & (wl_nm <= wl_max)
             if np.sum(mask) > 10:  # Mínimo de pontos para ajuste
                 wl_fit = wl_nm[mask]
-                spec_fit = spec[mask]
-        
-        # Ajuste de curva (se habilitado)
+                spec_fit = spec_eff[mask]
+
+        # Unidade exibida ao usuário (para textos de status / botões de copiar)
+        unidade = "dB" if show_power_db else ("u.a." if not y_is_db else "lin")
+
+        # Ajuste de curva (se habilitado) — opera sobre spec_eff
         fit_curve_name = None
         fit_curve_data = None
         fit_curve_wl = None
@@ -458,18 +483,17 @@ def main():
             params, curva, r2, fwhm = ajustar_curva(wl_fit, spec_fit, modelo=fit_model)
             if params is not None:
                 fit_curve_name = "Gaussiana" if fit_model == "gaussian" else "Lorentziana"
-                # Curva ajustada sobre a região filtrada
                 fit_curve_wl = wl_fit
-                fit_curve_data = curva
+                fit_curve_data = curva  # já está na escala efetiva
                 fit_info = (fit_model, params, r2, fwhm)
-                # Atualiza status com info do ajuste
                 amp, center, width = params
                 range_info = ""
                 if selected_range is not None:
                     range_info = f" [Região: {selected_range[0]:.1f}–{selected_range[1]:.1f}nm]"
                 status_var.set(
                     f"Arquivo {idx + 1}/{len(spectra_data)}: {nome}  |  "
-                    f"Ajuste {fit_curve_name}: λ={center:.2f}nm, A={amp:.1f}, FWHM={fwhm:.2f}nm, R²={r2:.4f}{range_info}"
+                    f"Ajuste {fit_curve_name}: λ={center:.2f}nm, A={amp:.4g} {unidade}, "
+                    f"FWHM={fwhm:.2f}nm, R²={r2:.4f}{range_info}"
                 )
             else:
                 fit_info = None
@@ -477,7 +501,7 @@ def main():
         else:
             fit_info = None
             status_var.set(f"Arquivo {idx + 1} / {len(spectra_data)}: {nome}")
-        
+
         plotar_espectro_com_picos(
             ax, wl_nm, spec,
             prominence=prominence,
@@ -485,7 +509,7 @@ def main():
             show_peaks=show_peaks,
             show_gradient=show_gradient,
             fit_curve=fit_curve_name,
-            fit_data=fit_curve_data,
+            fit_data_plot=fit_curve_data,
             fit_wl=fit_curve_wl,
             selected_range=selected_range,
             power_db=show_power_db,
@@ -515,19 +539,54 @@ def main():
         
         # Se exibir picos e houver exatamente um, já mostrar suas informações
         if show_peaks and not fit_curve_enabled:
-            peaks = detectar_picos(spec, prominence=prominence)
+            peaks = detectar_picos(spec_eff, prominence=prominence)
             if len(peaks) == 1:
                 wl_p = float(wl_nm[peaks[0]])
-                int_p = float(spec[peaks[0]])
+                int_p = float(spec_eff[peaks[0]])
                 last_clicked_wl = wl_p
                 last_clicked_int = int_p
                 status_var.set(
-                    f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.2f} u.a.  (use os botões para copiar)"
+                    f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
                 )
         elif not fit_curve_enabled:
             last_clicked_wl = None
             last_clicked_int = None
         canvas.draw_idle()
+
+    def _recalc_prominence(force_default=False):
+        """
+        Ajusta prominência e faixa do spinbox para a escala efetiva atual.
+
+        - ``force_default=True``: define prominência como 2% do range do espectro
+          efetivo (usado ao carregar arquivos novos).
+        - ``force_default=False``: escala a prominência atual proporcionalmente
+          ao novo range (usado quando o usuário alterna "Potência (dB)"),
+          preservando a sensibilidade relativa.
+        """
+        nonlocal prominence, last_spec_range
+        if not spectra_data:
+            return
+        idx = max(0, min(current_index, len(spectra_data) - 1))
+        _, _, spec_raw, y_is_db_i = spectra_data[idx]
+        spec_eff = _efetivar_spec(spec_raw, y_is_db_i, show_power_db)
+        rng = float(np.nanmax(spec_eff) - np.nanmin(spec_eff))
+        if rng <= 0:
+            return
+
+        if force_default or last_spec_range <= 0:
+            new_prom = rng * 0.02
+        else:
+            new_prom = prominence * (rng / last_spec_range)
+
+        # Limites razoáveis para o spinbox
+        minp = rng * 1e-5
+        maxp = rng * 0.5
+        new_prom = max(minp, min(maxp, new_prom))
+
+        prominence = new_prom
+        last_spec_range = rng
+        prominence_var.set(prominence)
+        spin_prominence.configure(from_=minp, to=maxp, increment=rng * 0.005)
 
     def anterior():
         nonlocal current_index
@@ -569,23 +628,25 @@ def main():
         if event.inaxes != ax or not spectra_data or not show_peaks:
             return
         idx = max(0, min(current_index, len(spectra_data) - 1))
-        _, wl_nm, spec, _ = spectra_data[idx]
-        peaks = detectar_picos(spec, prominence=prominence)
+        _, wl_nm, spec, y_is_db_i = spectra_data[idx]
+        spec_eff = _efetivar_spec(spec, y_is_db_i, show_power_db)
+        peaks = detectar_picos(spec_eff, prominence=prominence)
         if len(peaks) == 0:
             return
         x_click, y_click = event.xdata, event.ydata
         if x_click is None or y_click is None:
             return
         wl_picos = wl_nm[peaks]
-        int_picos = spec[peaks]
+        int_picos = spec_eff[peaks]
         distancias = (wl_picos - x_click) ** 2 + (int_picos - y_click) ** 2
         i_min = int(np.argmin(distancias))
         wl_p = float(wl_picos[i_min])
         int_p = float(int_picos[i_min])
         last_clicked_wl = wl_p
         last_clicked_int = int_p
+        unidade = "dB" if show_power_db else ("u.a." if not y_is_db_i else "lin")
         status_var.set(
-            f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.2f} u.a.  (use os botões para copiar)"
+            f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
         )
 
     def copiar_lambda():
@@ -674,6 +735,8 @@ def main():
     def toggle_power_db():
         nonlocal show_power_db
         show_power_db = var_show_power_db.get()
+        # Rescala prominência proporcionalmente para a nova escala (dB ↔ linear)
+        _recalc_prominence(force_default=False)
         atualizar_grafico()
 
     var_show_power_db = tk.BooleanVar(value=False)
@@ -735,11 +798,12 @@ def main():
             val = prominence_var.get()
         try:
             p = float(val)
-            prominence = max(0.5, min(1000.0, p))
+            prominence = max(0.0, p)
             prominence_var.set(prominence)
         except (ValueError, tk.TclError):
-            prominence = 5.0
-            prominence_var.set(5.0)
+            # Em caso de entrada inválida, volta ao default da escala atual
+            _recalc_prominence(force_default=True)
+            return
         if show_peaks:
             atualizar_grafico()
 
