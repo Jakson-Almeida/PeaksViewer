@@ -60,6 +60,7 @@ def _default_settings():
         "ui_visibility": {
             "navigation": True,
             "peaks": True,
+            "valley": True,
             "gradient": True,
             "power_db": True,
             "fit_curve": True,
@@ -68,6 +69,7 @@ def _default_settings():
         },
         "defaults": {
             "show_peaks": False,
+            "valley_mode": False,
             "show_gradient": False,
             "show_power_db": False,
             "fit_curve_enabled": False,
@@ -202,44 +204,68 @@ def lorentzian(x, amp, center, gamma):
     return amp * gamma ** 2 / ((x - center) ** 2 + gamma ** 2)
 
 
-def ajustar_curva(wl_nm, spec, modelo="gaussian"):
+def ajustar_curva(wl_nm, spec, modelo="gaussian", valley=False):
     """
-    Ajusta uma curva gaussiana ou lorentziana aos dados do espectro.
-    
+    Ajusta uma curva gaussiana ou lorentziana ao espectro.
+
+    Para ``valley=False`` (padrão) ajusta um pico (modelo amp·G(x) com amp > 0).
+    Para ``valley=True`` o vetor é refletido em torno do seu máximo (vale vira
+    pico) antes do ajuste e a curva resultante é invertida de volta para o
+    sistema original; a amplitude relatada fica negativa (= profundidade do
+    vale em relação à linha de base).
+
     Args:
         wl_nm: Array de comprimentos de onda (nm)
-        spec: Array de intensidades
+        spec: Array de intensidades (na escala efetiva atual)
         modelo: "gaussian" ou "lorentzian"
-    
+        valley: True para ajustar um vale em vez de um pico
+
     Returns:
-        (params, curva_ajustada, r_squared, fwhm) ou (None, None, None, None) se falhar
-        params: (amp, center, width) onde width é sigma (gaussian) ou gamma (lorentzian)
+        (params, curva_ajustada, r_squared, fwhm) — todos no sistema original
+        de coordenadas. ``params = (amp, center, width)``: ``width`` é σ para
+        gaussiana e γ para lorentziana; ``amp`` é positivo para picos e
+        negativo para vales.
     """
     try:
-        # Estimativa inicial dos parâmetros
-        amp_guess = np.max(spec)
-        center_guess = wl_nm[np.argmax(spec)]
+        spec_arr = np.asarray(spec, dtype=float)
+
+        # Reflete em torno do máximo quando ajustando vales — assim curve_fit
+        # vê um pico padrão e converge bem mesmo com baseline diferente de zero.
+        if valley:
+            ref = float(np.max(spec_arr))
+            spec_for_fit = ref - spec_arr
+        else:
+            ref = 0.0
+            spec_for_fit = spec_arr
+
+        amp_guess = float(np.max(spec_for_fit))
+        center_guess = wl_nm[int(np.argmax(spec_for_fit))]
         width_guess = (wl_nm[-1] - wl_nm[0]) / 10  # ~10% da faixa
-        
         p0 = [amp_guess, center_guess, width_guess]
-        
-        # Ajuste
+
         if modelo == "gaussian":
-            popt, _ = curve_fit(gaussian, wl_nm, spec, p0=p0, maxfev=5000)
-            curva = gaussian(wl_nm, *popt)
-            fwhm = 2.355 * abs(popt[2])  # FWHM = 2.355 * sigma
+            popt, _ = curve_fit(gaussian, wl_nm, spec_for_fit, p0=p0, maxfev=5000)
+            curva_fit = gaussian(wl_nm, *popt)
+            fwhm = 2.355 * abs(popt[2])  # FWHM = 2.355 · σ
         else:  # lorentzian
-            popt, _ = curve_fit(lorentzian, wl_nm, spec, p0=p0, maxfev=5000)
-            curva = lorentzian(wl_nm, *popt)
-            fwhm = 2 * abs(popt[2])  # FWHM = 2 * gamma
-        
-        # Calcula R²
-        ss_res = np.sum((spec - curva) ** 2)
-        ss_tot = np.sum((spec - np.mean(spec)) ** 2)
+            popt, _ = curve_fit(lorentzian, wl_nm, spec_for_fit, p0=p0, maxfev=5000)
+            curva_fit = lorentzian(wl_nm, *popt)
+            fwhm = 2 * abs(popt[2])  # FWHM = 2 · γ
+
+        if valley:
+            curva = ref - curva_fit
+            params = (-popt[0], popt[1], popt[2])  # profundidade = amp negativa
+        else:
+            curva = curva_fit
+            params = tuple(popt)
+
+        # R² calculado no sistema original (para comparar com os dados como exibidos)
+        ss_res = np.sum((spec_arr - curva) ** 2)
+        ss_tot = np.sum((spec_arr - np.mean(spec_arr)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        
-        return popt, curva, r_squared, fwhm
-    
+
+        return params, curva, r_squared, fwhm
+
     except Exception:
         return None, None, None, None
 
@@ -504,6 +530,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
     for key, label in [
         ("navigation", "Botões de navegação (Anterior / Próximo)"),
         ("peaks", "Checkbox \"Exibir picos\""),
+        ("valley", "Checkbox \"Modo vale\""),
         ("gradient", "Checkbox \"Gradiente de cores\""),
         ("power_db", "Checkbox \"Potência (dB)\""),
         ("fit_curve", "Ajuste de curva (checkbox + modelo + Limpar seleção)"),
@@ -527,6 +554,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
     default_vars = {}
     for key, label in [
         ("show_peaks", "Iniciar com \"Exibir picos\" ligado"),
+        ("valley_mode", "Iniciar em \"Modo vale\" (detecta mínimos em vez de máximos)"),
         ("show_gradient", "Iniciar com \"Gradiente de cores\" ligado"),
         ("show_power_db", "Iniciar com \"Potência (dB)\" ligado"),
         ("fit_curve_enabled", "Iniciar com \"Ajustar curva\" ligado"),
@@ -660,6 +688,7 @@ def main():
     # Estados iniciais vêm de settings["defaults"]; o usuário ajusta via toolbar
     # e configura novos defaults pelo modal "Configurações".
     show_peaks = bool(settings["defaults"].get("show_peaks", False))
+    valley_mode = bool(settings["defaults"].get("valley_mode", False))
     show_gradient = bool(settings["defaults"].get("show_gradient", False))
     show_power_db = bool(settings["defaults"].get("show_power_db", False))
     fit_curve_enabled = bool(settings["defaults"].get("fit_curve_enabled", False))
@@ -761,15 +790,17 @@ def main():
 
         # Unidade exibida ao usuário (para textos de status / botões de copiar)
         unidade = "dB" if show_power_db else ("u.a." if not y_is_db else "lin")
+        rotulo_extremo = "Vale" if valley_mode else "Pico"
 
-        # Ajuste de curva (se habilitado) — opera sobre spec_eff
+        # Ajuste de curva (se habilitado) — opera sobre spec_eff e respeita modo vale
         fit_curve_name = None
         fit_curve_data = None
         fit_curve_wl = None
         if fit_curve_enabled:
-            params, curva, r2, fwhm = ajustar_curva(wl_fit, spec_fit, modelo=fit_model)
+            params, curva, r2, fwhm = ajustar_curva(wl_fit, spec_fit, modelo=fit_model, valley=valley_mode)
             if params is not None:
-                fit_curve_name = "Gaussiana" if fit_model == "gaussian" else "Lorentziana"
+                modelo_nome = "Gaussiana" if fit_model == "gaussian" else "Lorentziana"
+                fit_curve_name = f"{modelo_nome} (vale)" if valley_mode else modelo_nome
                 fit_curve_wl = wl_fit
                 fit_curve_data = curva  # já está na escala efetiva
                 fit_info = (fit_model, params, r2, fwhm)
@@ -792,6 +823,7 @@ def main():
         plotar_espectro_com_picos(
             ax, wl_nm, spec,
             prominence=prominence,
+            valley=valley_mode,
             dark=dark_theme,
             show_peaks=show_peaks,
             show_gradient=show_gradient,
@@ -824,16 +856,16 @@ def main():
             span_selector = None
             selected_range = None
         
-        # Se exibir picos e houver exatamente um, já mostrar suas informações
+        # Se exibir picos/vales e houver exatamente um, já mostrar suas informações
         if show_peaks and not fit_curve_enabled:
-            peaks = detectar_picos(spec_eff, prominence=prominence)
+            peaks = detectar_picos(spec_eff, prominence=prominence, valley=valley_mode)
             if len(peaks) == 1:
                 wl_p = float(wl_nm[peaks[0]])
                 int_p = float(spec_eff[peaks[0]])
                 last_clicked_wl = wl_p
                 last_clicked_int = int_p
                 status_var.set(
-                    f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
+                    f"{rotulo_extremo} clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
                 )
         elif not fit_curve_enabled:
             last_clicked_wl = None
@@ -917,7 +949,7 @@ def main():
         idx = max(0, min(current_index, len(spectra_data) - 1))
         _, wl_nm, spec, y_is_db_i = spectra_data[idx]
         spec_eff = _efetivar_spec(spec, y_is_db_i, show_power_db)
-        peaks = detectar_picos(spec_eff, prominence=prominence)
+        peaks = detectar_picos(spec_eff, prominence=prominence, valley=valley_mode)
         if len(peaks) == 0:
             return
         x_click, y_click = event.xdata, event.ydata
@@ -932,8 +964,9 @@ def main():
         last_clicked_wl = wl_p
         last_clicked_int = int_p
         unidade = "dB" if show_power_db else ("u.a." if not y_is_db_i else "lin")
+        rotulo = "Vale" if valley_mode else "Pico"
         status_var.set(
-            f"Pico clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
+            f"{rotulo} clicado: λ = {wl_p:.2f} nm  |  Intensidade = {int_p:.4g} {unidade}  (use os botões para copiar)"
         )
 
     def copiar_lambda():
@@ -1005,6 +1038,16 @@ def main():
     var_show_peaks = tk.BooleanVar(value=show_peaks)
     chk_peaks = ttk.Checkbutton(fr_btn, text="Exibir picos", variable=var_show_peaks, command=toggle_peaks)
     toolbar_layout.append(("peaks", chk_peaks, dict(side=tk.LEFT, padx=(16, 4))))
+
+    # Modo vale: alterna toda a lógica de detecção/ajuste para mínimos locais.
+    def toggle_valley_mode():
+        nonlocal valley_mode
+        valley_mode = var_valley_mode.get()
+        atualizar_grafico()
+
+    var_valley_mode = tk.BooleanVar(value=valley_mode)
+    chk_valley = ttk.Checkbutton(fr_btn, text="Modo vale", variable=var_valley_mode, command=toggle_valley_mode)
+    toolbar_layout.append(("valley", chk_valley, dict(side=tk.LEFT, padx=(8, 4))))
 
     # Gradiente de cores
     def toggle_gradient():

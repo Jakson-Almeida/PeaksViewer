@@ -8,6 +8,7 @@ Permite carregar um ou vários arquivos de espectro (formato `wavelength;intensi
 
 ## Funcionalidades
 
+- **Modo pico ou vale**: alterne com a checkbox "Modo vale" (toolbar ou Configurações) e tudo passa a operar em mínimos locais — detecção, marcadores e ajuste gaussiano/lorentziano (curva refletida ao redor do máximo da seleção, profundidade reportada como amplitude negativa).
 - **Carregamento múltiplo**: abra vários arquivos de uma vez e navegue entre eles.
 - **Navegação por teclado**: `←` / `→`, `<` / `>`, `,` / `.`, `-` / `+`, `Page Up` / `Page Down`.
 - **Detecção automática de picos** via `scipy.signal.find_peaks`, com prominência ajustável (filtra ruído).
@@ -119,6 +120,7 @@ Exemplo de `settings.json`:
   "ui_visibility": {
     "navigation": true,
     "peaks": true,
+    "valley": true,
     "gradient": false,
     "power_db": true,
     "fit_curve": true,
@@ -127,6 +129,7 @@ Exemplo de `settings.json`:
   },
   "defaults": {
     "show_peaks": true,
+    "valley_mode": false,
     "show_gradient": false,
     "show_power_db": false,
     "fit_curve_enabled": false,
