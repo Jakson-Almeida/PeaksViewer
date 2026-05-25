@@ -382,7 +382,7 @@ def main():
     lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 4))
 
     def carregar_arquivos():
-        nonlocal spectra_data, current_index
+        nonlocal spectra_data, current_index, show_power_db
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivo(s) de espectro",
             filetypes=[
@@ -409,6 +409,14 @@ def main():
             messagebox.showwarning("Aviso", "Nenhum espectro válido carregado.")
             return
         current_index = 0
+
+        # Auto-ativa "Potência (dB)" quando algum arquivo já vem em escala log
+        # (ex.: ThorLabs FTS com #YAxisUnit;dBm). Se todos forem lineares, deixa
+        # a opção como o usuário a configurou.
+        if any(s[3] for s in spectra_data) and not show_power_db:
+            show_power_db = True
+            var_show_power_db.set(True)
+
         status_var.set(f"Carregados {len(spectra_data)} arquivo(s). Navegue com < e > ou setas.")
         atualizar_grafico()
 
