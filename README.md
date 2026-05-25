@@ -21,7 +21,11 @@ Permite carregar um ou vários arquivos de espectro (formato `wavelength;intensi
 
 ## Formato dos arquivos de entrada
 
-Arquivos texto (`.txt` ou `.csv`), uma amostra por linha, separados por `;`:
+Os arquivos são detectados automaticamente. Há dois formatos suportados:
+
+### 1. Formato simples (`.txt` ou `.csv`)
+
+Uma amostra por linha, separados por `;`:
 
 ```
 6.5000000e-07;120.5
@@ -30,10 +34,39 @@ Arquivos texto (`.txt` ou `.csv`), uma amostra por linha, separados por `;`:
 ...
 ```
 
-- **Coluna 1**: comprimento de onda em **metros** (será convertido para nm internamente: `× 1e9`).
-- **Coluna 2**: intensidade (unidade arbitrária).
+- **Coluna 1**: comprimento de onda em **metros** (~`1e-7`) **ou** em **nm** (~`100–3000`).
+  A unidade é detectada pela magnitude — não é necessário converter manualmente.
+- **Coluna 2**: intensidade (unidade arbitrária, linear).
 
-Linhas inválidas são ignoradas silenciosamente.
+### 2. Formato ThorLabs FTS (OSA203 e similares)
+
+Arquivo CSV com cabeçalho `[SpectrumHeader]`, linhas de metadados `#Key;Value`
+e bloco de dados após `[Data]`:
+
+```
+#Thorlabs FTS
+[SpectrumHeader]
+#Date;20260522
+#XAxisUnit;nm_air
+#YAxisUnit;dBm
+#InstrModel;OSA203
+...
+[Data]
+9.997433472e+02;-6.069665527e+01
+9.997922363e+02;-6.210790634e+01
+...
+```
+
+O leitor honra:
+
+- `#XAxisUnit`: `nm_air`, `nm_vac`, `nm`, `m` (conversão automática para nm).
+- `#YAxisUnit`: `dBm`, `dB`, `dBW` (mantém escala logarítmica) ou linear.
+
+Quando a fonte está em dB, o eixo Y do gráfico é rotulado como **Potência (dBm)**
+e o ajuste em escala log é tratado corretamente (sem aplicar `10·log10` duas vezes).
+A opção **Potência (dB)** passa a normalizar ao pico (0 dB no máximo).
+
+Linhas inválidas, em branco e seções desconhecidas são ignoradas silenciosamente.
 
 ## Instalação
 

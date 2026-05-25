@@ -1,7 +1,17 @@
 """
 Visualizador de espectros com detecção de picos.
-Permite carregar um ou vários arquivos de espectro (formato wl;intensity),
-visualizar um por vez e navegar entre eles com < e > (ou setas).
+
+Permite carregar um ou vários arquivos de espectro e visualizar um por vez,
+navegando entre eles com < e > (ou setas).
+
+Formatos suportados (auto-detectados):
+  - Simples: ``wavelength;intensity`` por linha, sem cabeçalho.
+    Wavelength pode estar em metros (~1e-7) ou nm (~100–3000); a detecção é
+    automática pela magnitude.
+  - ThorLabs FTS (OSA203 e similares): arquivo CSV com bloco ``[SpectrumHeader]``
+    contendo metadados ``#Key;Value`` e dados numéricos após ``[Data]``.
+    As unidades dos eixos são lidas de ``#XAxisUnit`` (nm_air, nm_vac, m, ...)
+    e ``#YAxisUnit`` (dBm, dB, linear, ...).
 """
 
 import tkinter as tk
@@ -130,26 +140,81 @@ def ajustar_curva(wl_nm, spec, modelo="gaussian"):
 
 def ler_dados_arquivo(caminho_arquivo):
     """
-    Lê arquivo de espectro (uma linha por ponto: wavelength;intensity).
-    Retorna (wl_metros, intensidade) ou ([], []) em caso de erro.
+    Lê arquivo de espectro com auto-detecção de formato.
+
+    Suporta o formato simples ``wavelength;intensity`` e o formato ThorLabs FTS
+    (cabeçalho com ``#Key;Value`` e seção ``[Data]``). A unidade do eixo X é
+    convertida para nm; a unidade do eixo Y é preservada, mas sinalizada via
+    ``y_is_db`` quando a fonte estiver em escala logarítmica (dBm/dB/dBW).
+
+    Retorna ``(wl_nm, intensidade, y_is_db)`` ou ``([], [], False)`` em caso de erro.
     """
-    frequencias = []
-    ganhos = []
+    wl_raw = []
+    int_raw = []
+    metadata = {}
+    in_data_section = False
+    has_data_marker = False
+
     try:
         with open(caminho_arquivo, "r", encoding="utf-8", errors="replace") as arquivo:
             for linha in arquivo:
-                dados = linha.strip().split(";")
+                linha = linha.strip()
+                if not linha:
+                    continue
+
+                # Marcador de seção (ex.: [SpectrumHeader], [Data])
+                if linha.startswith("[") and linha.endswith("]"):
+                    in_data_section = linha.lower() == "[data]"
+                    has_data_marker = has_data_marker or in_data_section
+                    continue
+
+                # Linhas de cabeçalho: "#Key;Value"
+                if linha.startswith("#"):
+                    partes = linha[1:].split(";", 1)
+                    if len(partes) == 2:
+                        metadata[partes[0].strip()] = partes[1].strip()
+                    continue
+
+                # Se o arquivo tem marcador [Data], só lê após ele
+                if has_data_marker and not in_data_section:
+                    continue
+
+                dados = linha.split(";")
                 if len(dados) >= 2:
                     try:
-                        frequencias.append(float(dados[0]))
-                        ganhos.append(float(dados[1]))
+                        wl_raw.append(float(dados[0]))
+                        int_raw.append(float(dados[1]))
                     except ValueError:
                         continue
     except FileNotFoundError:
-        return [], []
+        return [], [], False
     except Exception:
-        return [], []
-    return frequencias, ganhos
+        return [], [], False
+
+    if not wl_raw:
+        return [], [], False
+
+    wl_arr = np.array(wl_raw, dtype=float)
+    int_arr = np.array(int_raw, dtype=float)
+
+    # Eixo X: garantir nm a partir do cabeçalho ou da magnitude
+    x_unit = metadata.get("XAxisUnit", "").lower()
+    if x_unit.startswith("nm"):
+        wl_nm = wl_arr
+    elif x_unit == "m":
+        wl_nm = wl_arr * 1e9
+    else:
+        # Sem dica do cabeçalho: nm fica em ~100–3000; metros em ~1e-7
+        if float(np.median(np.abs(wl_arr))) < 1e-3:
+            wl_nm = wl_arr * 1e9
+        else:
+            wl_nm = wl_arr
+
+    # Eixo Y: detecta escala logarítmica (dBm/dB/dBW) pelo cabeçalho
+    y_unit = metadata.get("YAxisUnit", "").lower()
+    y_is_db = y_unit in ("db", "dbm", "dbw")
+
+    return wl_nm.tolist(), int_arr.tolist(), y_is_db
 
 
 def detectar_picos(intensidade, prominence=5, valley=False):
@@ -172,13 +237,16 @@ def _to_db(intensity, ref=None):
     return 10 * np.log10(np.maximum(arr / ref, 1e-12))
 
 
-def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data=None, fit_wl=None, selected_range=None, power_db=False):
+def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data=None, fit_wl=None, selected_range=None, power_db=False, y_is_db=False):
     """
     Plota espectro em ax. Se show_peaks=True, detecta picos e desenha marcadores.
     Se show_gradient=True, preenche a área sob a curva com gradiente de cores (λ).
     Se fit_curve e fit_data são fornecidos, plota a curva ajustada.
     Se selected_range é fornecido, desenha a região selecionada.
-    Se power_db=True, eixo Y em dB (relativo ao máximo).
+    Se ``y_is_db`` é True, os dados já estão em escala logarítmica (dBm/dB) e o
+    eixo Y é tratado em consequência: por padrão exibe os valores absolutos
+    (dBm) e, com ``power_db=True``, normaliza ao pico (0 dB no máximo).
+    Para dados lineares, ``power_db=True`` converte para dB relativo ao máximo.
     Limpa marcadores antigos em ax (ax.markers e ax.marker).
     """
     ax.clear()
@@ -186,17 +254,32 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
     color_bg = "black" if dark else "white"
     ax.set_facecolor(color_bg)
     ax.set_xlabel("Comprimento de onda (nm)", color=color_fg)
-    ax.set_ylabel("Potência (dB)" if power_db else "Intensidade (u.a.)", color=color_fg)
     ax.tick_params(colors=color_fg)
     ax.grid(True)
 
-    ref = np.max(spec) if np.max(spec) > 0 else 1.0
-    spec_plot = _to_db(spec, ref) if power_db else spec
-    fit_data_plot = _to_db(fit_data, ref) if (power_db and fit_data is not None) else fit_data
+    if y_is_db:
+        # Dados já em dB: nunca aplicar 10*log10. Apenas normaliza ao pico se pedido.
+        if power_db:
+            ref = float(np.max(spec))
+            spec_plot = np.asarray(spec, dtype=float) - ref
+            fit_data_plot = (np.asarray(fit_data, dtype=float) - ref) if fit_data is not None else None
+            ylabel = "Potência (dB, rel. ao pico)"
+        else:
+            spec_plot = np.asarray(spec, dtype=float)
+            fit_data_plot = np.asarray(fit_data, dtype=float) if fit_data is not None else None
+            ylabel = "Potência (dBm)"
+    else:
+        ref = np.max(spec) if np.max(spec) > 0 else 1.0
+        spec_plot = _to_db(spec, ref) if power_db else np.asarray(spec, dtype=float)
+        fit_data_plot = _to_db(fit_data, ref) if (power_db and fit_data is not None) else fit_data
+        ylabel = "Potência (dB)" if power_db else "Intensidade (u.a.)"
+
+    ax.set_ylabel(ylabel, color=color_fg)
+    in_log_scale = power_db or y_is_db
 
     if show_gradient:
         gradient_colors = precompute_gradient(wl_nm, dark=dark)
-        floor = np.min(spec_plot) - 10 if power_db else 0
+        floor = np.min(spec_plot) - 10 if in_log_scale else 0
         verts = [
             [(wl_nm[j], floor), (wl_nm[j], spec_plot[j]), (wl_nm[j + 1], spec_plot[j + 1]), (wl_nm[j + 1], floor)]
             for j in range(len(wl_nm) - 1)
@@ -256,7 +339,7 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
     ax.set_xlim(wl_nm.min(), wl_nm.max())
     ymin, ymax = np.nanmin(spec_plot), np.nanmax(spec_plot)
     margin = (ymax - ymin) * 0.05 if ymax > ymin else 1.0
-    if power_db:
+    if in_log_scale:
         ax.set_ylim(ymin - margin, ymax + margin)
     else:
         ax.set_ylim(max(0, ymin - margin), ymax + margin)
@@ -268,7 +351,7 @@ def main():
     root.geometry("900x550")
     root.minsize(700, 450)
 
-    # Dados: lista de (caminho, wl_nm, spec)
+    # Dados: lista de (caminho, wl_nm, spec, y_is_db)
     spectra_data = []
     current_index = 0
     prominence = 5.0
@@ -302,22 +385,26 @@ def main():
         nonlocal spectra_data, current_index
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivo(s) de espectro",
-            filetypes=[("Texto / CSV", "*.txt *.csv"), ("Todos", "*.*")],
+            filetypes=[
+                ("Texto / CSV", "*.txt *.csv"),
+                ("ThorLabs FTS", "*.csv *.spf2 *.txt"),
+                ("Todos", "*.*"),
+            ],
         )
         if not paths:
             return
         spectra_data = []
         for path in paths:
-            wl_m, spec = ler_dados_arquivo(path)
-            if not wl_m or not spec:
+            wl_list, spec, y_is_db = ler_dados_arquivo(path)
+            if not wl_list or len(spec) == 0:
                 messagebox.showwarning(
                     "Aviso",
                     f"Não foi possível ler dados de:\n{os.path.basename(path)}",
                 )
                 continue
-            wl_nm = np.array(wl_m) * 1e9
+            wl_nm = np.array(wl_list)
             spec = np.array(spec)
-            spectra_data.append((path, wl_nm, spec))
+            spectra_data.append((path, wl_nm, spec, y_is_db))
         if not spectra_data:
             messagebox.showwarning("Aviso", "Nenhum espectro válido carregado.")
             return
@@ -335,7 +422,7 @@ def main():
             canvas.draw_idle()
             return
         idx = max(0, min(current_index, len(spectra_data) - 1))
-        path, wl_nm, spec = spectra_data[idx]
+        path, wl_nm, spec, y_is_db = spectra_data[idx]
         nome = os.path.basename(path)
         
         # Filtra dados se houver região selecionada
@@ -387,6 +474,7 @@ def main():
             fit_wl=fit_curve_wl,
             selected_range=selected_range,
             power_db=show_power_db,
+            y_is_db=y_is_db,
         )
         
         # Ativa/desativa SpanSelector conforme fit_curve_enabled
@@ -466,7 +554,7 @@ def main():
         if event.inaxes != ax or not spectra_data or not show_peaks:
             return
         idx = max(0, min(current_index, len(spectra_data) - 1))
-        _, wl_nm, spec = spectra_data[idx]
+        _, wl_nm, spec, _ = spectra_data[idx]
         peaks = detectar_picos(spec, prominence=prominence)
         if len(peaks) == 0:
             return
