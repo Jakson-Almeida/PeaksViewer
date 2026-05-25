@@ -831,7 +831,7 @@ def main():
         if show_peaks:
             atualizar_grafico()
 
-    tk.Label(fr_btn, text="Prominência (↑ menos picos):", fg="gray").pack(side=tk.LEFT, padx=(8, 2))
+    tk.Label(fr_btn, text="Prominência:", fg="gray").pack(side=tk.LEFT, padx=(8, 2))
     prominence_var = tk.DoubleVar(value=5.0)
     spin_prominence = ttk.Spinbox(
         fr_btn,
@@ -847,7 +847,7 @@ def main():
     spin_prominence.bind("<FocusOut>", lambda e: on_prominence_change())
 
     # Copiar λ ou intensidade do último pico clicado
-    tk.Label(fr_btn, text="Copiar pico clicado:", fg="gray").pack(side=tk.LEFT, padx=(12, 2))
+    tk.Label(fr_btn, text="Pico:", fg="gray").pack(side=tk.LEFT, padx=(12, 2))
     ttk.Button(fr_btn, text="Copiar λ", command=copiar_lambda).pack(side=tk.LEFT, padx=2)
     ttk.Button(fr_btn, text="Copiar I", command=copiar_intensidade).pack(side=tk.LEFT, padx=2)
 
