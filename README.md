@@ -106,8 +106,9 @@ O botão **⚙ Configurações** no canto direito da barra abre um modal com tr�
   prominência, botões de copiar). Aplicado imediatamente.
 - **Comportamento**: estados iniciais ao abrir o programa (qual checkbox já
   vem ligado — inclusive *Modo vale* e *Recortar* —, qual modelo de ajuste
-  padrão), e o auto-ativar de "Potência (dB)" quando dados em escala log são
-  detectados.
+  padrão), o auto-ativar de "Potência (dB)" quando dados em escala log são
+  detectados, e o switch *Habilitar navegação por teclado entre espectros*
+  (desligue para ignorar `←/→`, `<>`, `,`/`.`, `-`/`+`, `PgUp`/`PgDn`).
 - **Aparência**: tema escuro do gráfico e tamanho inicial da janela.
 
 As preferências são gravadas em **`~/.peaksviewer/settings.json`** (Windows:
@@ -139,7 +140,8 @@ Exemplo de `settings.json`:
     "fit_curve_enabled": false,
     "range_crop_mode": false,
     "fit_model": "lorentzian",
-    "auto_enable_db_when_detected": true
+    "auto_enable_db_when_detected": true,
+    "keyboard_navigation": true
   },
   "appearance": {
     "dark_theme": false,

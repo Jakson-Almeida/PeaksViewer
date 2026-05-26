@@ -77,6 +77,7 @@ def _default_settings():
             "range_crop_mode": False,
             "fit_model": "gaussian",
             "auto_enable_db_when_detected": True,
+            "keyboard_navigation": True,
         },
         "appearance": {
             "dark_theme": False,
@@ -592,6 +593,13 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         variable=var_auto_db,
     ).pack(anchor=tk.W, padx=24, pady=2)
 
+    var_kbd_nav = tk.BooleanVar(value=settings["defaults"].get("keyboard_navigation", True))
+    ttk.Checkbutton(
+        tab_def,
+        text="Habilitar navegação por teclado entre espectros (←/→, <>, , ., -+, PgUp/PgDn)",
+        variable=var_kbd_nav,
+    ).pack(anchor=tk.W, padx=24, pady=2)
+
     # ----- Tab 3: Aparência -----
     tab_apa = ttk.Frame(nb)
     nb.add(tab_apa, text="Aparência")
@@ -625,6 +633,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
             v.set(defaults["defaults"][k])
         var_fit_model.set(defaults["defaults"]["fit_model"])
         var_auto_db.set(defaults["defaults"]["auto_enable_db_when_detected"])
+        var_kbd_nav.set(defaults["defaults"]["keyboard_navigation"])
         var_dark.set(defaults["appearance"]["dark_theme"])
         var_geom.set(defaults["appearance"]["window_geometry"])
 
@@ -636,6 +645,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
             settings["defaults"][k] = bool(v.get())
         settings["defaults"]["fit_model"] = var_fit_model.get()
         settings["defaults"]["auto_enable_db_when_detected"] = bool(var_auto_db.get())
+        settings["defaults"]["keyboard_navigation"] = bool(var_kbd_nav.get())
         settings["appearance"]["dark_theme"] = bool(var_dark.get())
         # Validação simples para a geometria (ex.: "900x550")
         geom_txt = var_geom.get().strip()
@@ -709,6 +719,7 @@ def main():
     show_power_db = bool(settings["defaults"].get("show_power_db", False))
     fit_curve_enabled = bool(settings["defaults"].get("fit_curve_enabled", False))
     range_crop_mode = bool(settings["defaults"].get("range_crop_mode", False))
+    keyboard_nav_enabled = bool(settings["defaults"].get("keyboard_navigation", True))
     fit_model = str(settings["defaults"].get("fit_model", "gaussian"))
     dark_theme = bool(settings["appearance"].get("dark_theme", False))
     last_clicked_wl = None  # último pico clicado (para copiar)
@@ -983,6 +994,11 @@ def main():
         atualizar_grafico()
 
     def on_key(event):
+        # Curto-circuito quando o usuário desligou navegação por teclado no modal.
+        # Mantemos os bindings sempre conectados pra evitar churn de bind/unbind;
+        # o gate de comportamento mora aqui.
+        if not keyboard_nav_enabled:
+            return None
         key = event.keysym
         if key in ("Left", "Prior", "comma", "less", "minus"):
             anterior()
@@ -1280,8 +1296,9 @@ def main():
 
     def aplicar_settings_runtime():
         """Aplica em tempo real os settings que afetam o estado vivo."""
-        nonlocal dark_theme
+        nonlocal dark_theme, keyboard_nav_enabled
         dark_theme = bool(settings["appearance"].get("dark_theme", False))
+        keyboard_nav_enabled = bool(settings["defaults"].get("keyboard_navigation", True))
 
     btn_configuracoes = ttk.Button(fr_btn, text="⚙ Configurações", command=abrir_configuracoes)
 
