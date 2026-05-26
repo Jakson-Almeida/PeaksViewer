@@ -528,7 +528,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
     modal.title("Configurações")
     modal.transient(root)
     modal.grab_set()
-    modal.geometry("560x460")
+    modal.geometry("560x560")
     modal.minsize(480, 380)
 
     nb = ttk.Notebook(modal)
@@ -971,10 +971,16 @@ def main():
             y_is_db=y_is_db,
         )
         
-        # Ativa/desativa SpanSelector conforme fit_curve_enabled
+        # Ativa/desativa SpanSelector conforme fit_curve_enabled.
+        # Os callbacks fazem early-return checando o flag global em tempo de
+        # disparo — defesa contra versões do matplotlib em que set_active(False)
+        # não impede o disparo do onselect (ver bug do "Recortar" desabilitado
+        # respondendo ao mouse).
         if fit_curve_enabled and span_selector is None:
             def onselect(xmin, xmax):
                 nonlocal selected_range
+                if not fit_curve_enabled:
+                    return
                 selected_range = (float(xmin), float(xmax))
                 atualizar_grafico()
             
@@ -988,13 +994,20 @@ def main():
                 drag_from_anywhere=True,
             )
         elif not fit_curve_enabled and span_selector is not None:
-            span_selector.set_active(False)
+            try:
+                span_selector.set_active(False)
+                span_selector.set_visible(False)
+                span_selector.disconnect_events()
+            except Exception:
+                pass
             span_selector = None
             selected_range = None
 
         # Idem para o seletor de range de exibição (cor distinta da seleção do fit)
         if range_crop_mode and span_selector_range is None:
             def onselect_range(xmin, xmax):
+                if not range_crop_mode:
+                    return
                 if not spectra_data:
                     return
                 i = max(0, min(current_index, len(display_ranges) - 1))
@@ -1012,7 +1025,12 @@ def main():
                 drag_from_anywhere=False,
             )
         elif not range_crop_mode and span_selector_range is not None:
-            span_selector_range.set_active(False)
+            try:
+                span_selector_range.set_active(False)
+                span_selector_range.set_visible(False)
+                span_selector_range.disconnect_events()
+            except Exception:
+                pass
             span_selector_range = None
         
         # Se exibir picos/vales e houver exatamente um, já mostrar suas informações
