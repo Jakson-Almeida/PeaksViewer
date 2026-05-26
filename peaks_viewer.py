@@ -826,7 +826,7 @@ def main():
     lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 4))
 
     def carregar_arquivos():
-        nonlocal spectra_data, display_ranges, current_index, show_power_db, range_crop_mode
+        nonlocal spectra_data, display_ranges, current_index, show_power_db
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivo(s) de espectro",
             filetypes=[
@@ -853,18 +853,15 @@ def main():
             messagebox.showwarning("Aviso", "Nenhum espectro válido carregado.")
             return
         # Inicializa display_ranges segundo o modo do range espectral:
-        #   - "manual": todos os espectros já entram com (sp_min, sp_max) e o
-        #     checkbox "Recortar" é ligado pra deixar o recorte aplicado.
+        #   - "manual": todos os espectros entram com (sp_min, sp_max) — o
+        #     range já é aplicado automaticamente pelo plotter. O checkbox
+        #     "Recortar" NÃO é alterado: ele reflete apenas a intenção do
+        #     usuário de editar o range com o mouse.
         #   - "auto":   cada espectro segue mostrando seu próprio min/max.
         if spectral_range_mode == "manual":
             lo = float(min(spectral_range_min, spectral_range_max))
             hi = float(max(spectral_range_min, spectral_range_max))
             display_ranges = [(lo, hi) for _ in spectra_data]
-            range_crop_mode = True
-            try:
-                var_range_crop.set(True)
-            except (NameError, tk.TclError):
-                pass
         else:
             display_ranges = [None] * len(spectra_data)
         current_index = 0
@@ -946,12 +943,14 @@ def main():
             fit_info = None
             status_var.set(f"Arquivo {idx + 1} / {len(spectra_data)}: {nome}")
 
-        # Recorte de exibição (per-spectrum). Só é aplicado quando o checkbox
-        # "Recortar" está ligado; o valor armazenado fica preservado pra quando
-        # o usuário voltar a ligar.
+        # Recorte de exibição (per-spectrum). É aplicado SEMPRE que o range
+        # estiver definido para o espectro, independente do checkbox "Recortar"
+        # — o checkbox controla apenas a edição via mouse, não a aplicação. Isso
+        # evita marcar a UI automaticamente quando o modo "manual" das
+        # configurações pré-popula os ranges no carregamento.
         active_display_range = (
             display_ranges[idx]
-            if range_crop_mode and idx < len(display_ranges)
+            if idx < len(display_ranges)
             else None
         )
 
@@ -1410,15 +1409,16 @@ def main():
     def aplicar_settings_runtime():
         """Aplica em tempo real os settings que afetam o estado vivo."""
         nonlocal dark_theme, keyboard_nav_enabled, spectral_range_mode
-        nonlocal spectral_range_min, spectral_range_max, range_crop_mode
+        nonlocal spectral_range_min, spectral_range_max
         nonlocal display_ranges
         dark_theme = bool(settings["appearance"].get("dark_theme", False))
         keyboard_nav_enabled = bool(settings["defaults"].get("keyboard_navigation", True))
 
         # Re-aplica o range espectral em todos os espectros já carregados.
         # Em "manual": força (sp_min, sp_max) em cada item, sobrescrevendo
-        # ajustes pontuais do usuário (é a intenção explícita do modal); e
-        # liga o checkbox Recortar pra deixar o recorte visível.
+        # ajustes pontuais do usuário (intenção explícita do modal). O range
+        # é aplicado automaticamente pelo plotter; o checkbox "Recortar" não
+        # é tocado — ele continua refletindo apenas a intenção do usuário.
         # Em "auto": limpa todos os ranges armazenados, voltando à vista
         # completa de cada espectro.
         new_mode = settings["defaults"].get("spectral_range_mode", "auto")
@@ -1433,11 +1433,6 @@ def main():
                 lo = float(min(spectral_range_min, spectral_range_max))
                 hi = float(max(spectral_range_min, spectral_range_max))
                 display_ranges = [(lo, hi) for _ in spectra_data]
-                range_crop_mode = True
-                try:
-                    var_range_crop.set(True)
-                except tk.TclError:
-                    pass
             else:
                 display_ranges = [None] * len(spectra_data)
 

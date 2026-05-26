@@ -21,7 +21,7 @@ Permite carregar um ou vários arquivos de espectro (formato `wavelength;intensi
   - FWHM (largura à meia altura)
   - R² (qualidade do ajuste)
 - **Seleção de região** com o mouse (arrastar sobre o gráfico) para ajustar apenas um intervalo do espectro.
-- **Recorte de exibição (range)**: ative a checkbox "Recortar" e arraste o mouse para enquadrar o gráfico em um intervalo específico de λ. O recorte é **por espectro** (cada arquivo aberto mantém o próprio range) e o botão **Aplicar a todos** propaga o range atual para todos os espectros carregados. **Limpar recorte** zera só o atual; desligar o checkbox volta à vista completa preservando o range armazenado.
+- **Recorte de exibição (range)**: o gráfico pode ser limitado a um intervalo específico de λ — **por espectro**. O range é aplicado sempre que estiver definido (seja por modo *manual* nas Configurações, seja por edição via mouse), independente do checkbox. A checkbox **"Recortar"** controla apenas a edição pelo mouse: marque-a e arraste sobre o gráfico para definir/atualizar o range; desmarcar apenas desliga a edição (o range permanece aplicado). **Aplicar a todos** propaga o range do espectro corrente para todos os demais. **Limpar recorte** zera o range do espectro atual, voltando à vista completa.
 
 ## Formato dos arquivos de entrada
 
@@ -94,7 +94,7 @@ python peaks_viewer.py
 4. Marque **Gradiente de cores** para preencher a área sob a curva com as cores do espectro visível.
 5. Marque **Potência (dB)** para visualizar em escala logarítmica.
 6. Marque **Ajustar curva**, escolha **gaussian** ou **lorentzian** e, opcionalmente, arraste o mouse sobre o gráfico para restringir o ajuste a uma região.
-7. Marque **Recortar** e arraste o mouse para enquadrar o gráfico num intervalo de λ; com vários arquivos abertos, use **Aplicar a todos** para propagar o mesmo range, ou **Limpar recorte** para reverter ao espectro inteiro.
+7. Para limitar a janela de exibição a um intervalo de λ: marque **Recortar** e arraste o mouse (ou configure um intervalo padrão em **Configurações → Range espectral → Manual**). O recorte é por espectro. Com vários arquivos abertos, use **Aplicar a todos** para propagar; use **Limpar recorte** para reverter ao espectro inteiro.
 8. Clique em um pico e use **Copiar λ** ou **Copiar I** para copiar os valores.
 
 ## Configurações persistentes
