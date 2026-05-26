@@ -64,6 +64,7 @@ def _default_settings():
             "gradient": True,
             "power_db": True,
             "fit_curve": True,
+            "display_range": True,
             "prominence": True,
             "copy_buttons": True,
         },
@@ -73,6 +74,7 @@ def _default_settings():
             "show_gradient": False,
             "show_power_db": False,
             "fit_curve_enabled": False,
+            "range_crop_mode": False,
             "fit_model": "gaussian",
             "auto_enable_db_when_detected": True,
         },
@@ -404,7 +406,7 @@ def _ylabel_para_escala(y_is_db, power_db):
     return "Intensidade (u.a.)"
 
 
-def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data_plot=None, fit_wl=None, selected_range=None, power_db=False, y_is_db=False):
+def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=False, show_peaks=False, show_gradient=False, fit_curve=None, fit_data_plot=None, fit_wl=None, selected_range=None, display_range=None, power_db=False, y_is_db=False):
     """
     Plota o espectro convertido para a escala atualmente em uso (linear ou dB),
     desenhada por ``_efetivar_spec``.
@@ -488,8 +490,16 @@ def plotar_espectro_com_picos(ax, wl_nm, spec, prominence=5, valley=False, dark=
             )
             ax.markers.append(marker)
 
-    ax.set_xlim(wl_nm.min(), wl_nm.max())
-    ymin, ymax = float(np.nanmin(spec_plot)), float(np.nanmax(spec_plot))
+    if display_range is not None:
+        # Recorte de exibição: restringe xlim e enquadra Y às amostras visíveis
+        x_lo, x_hi = float(min(display_range)), float(max(display_range))
+        ax.set_xlim(x_lo, x_hi)
+        mask_vis = (np.asarray(wl_nm) >= x_lo) & (np.asarray(wl_nm) <= x_hi)
+        spec_vis = spec_plot[mask_vis] if np.any(mask_vis) else spec_plot
+    else:
+        ax.set_xlim(wl_nm.min(), wl_nm.max())
+        spec_vis = spec_plot
+    ymin, ymax = float(np.nanmin(spec_vis)), float(np.nanmax(spec_vis))
     margin = (ymax - ymin) * 0.05 if ymax > ymin else max(abs(ymax) * 0.05, 1e-12)
     if in_log_scale or ymin < 0:
         ax.set_ylim(ymin - margin, ymax + margin)
@@ -534,6 +544,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         ("gradient", "Checkbox \"Gradiente de cores\""),
         ("power_db", "Checkbox \"Potência (dB)\""),
         ("fit_curve", "Ajuste de curva (checkbox + modelo + Limpar seleção)"),
+        ("display_range", "Recortar exibição (Recortar + Aplicar a todos + Limpar)"),
         ("prominence", "Spinbox de Prominência"),
         ("copy_buttons", "Botões Copiar λ / Copiar I"),
     ]:
@@ -558,6 +569,7 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         ("show_gradient", "Iniciar com \"Gradiente de cores\" ligado"),
         ("show_power_db", "Iniciar com \"Potência (dB)\" ligado"),
         ("fit_curve_enabled", "Iniciar com \"Ajustar curva\" ligado"),
+        ("range_crop_mode", "Iniciar com \"Recortar\" ligado (seleção de range pelo mouse)"),
     ]:
         v = tk.BooleanVar(value=settings["defaults"].get(key, False))
         default_vars[key] = v
@@ -682,6 +694,10 @@ def main():
 
     # Dados: lista de (caminho, wl_nm, spec, y_is_db)
     spectra_data = []
+    # display_ranges: lista paralela a spectra_data — cada item é None ou
+    # (wl_min, wl_max) com o recorte de exibição daquele espectro. Persiste
+    # entre alternâncias do checkbox "Recortar"; é resetado ao carregar arquivos.
+    display_ranges = []
     current_index = 0
     prominence = 5.0
     last_spec_range = 0.0  # range do spec_eff na última recalculação (escala atual)
@@ -692,13 +708,15 @@ def main():
     show_gradient = bool(settings["defaults"].get("show_gradient", False))
     show_power_db = bool(settings["defaults"].get("show_power_db", False))
     fit_curve_enabled = bool(settings["defaults"].get("fit_curve_enabled", False))
+    range_crop_mode = bool(settings["defaults"].get("range_crop_mode", False))
     fit_model = str(settings["defaults"].get("fit_model", "gaussian"))
     dark_theme = bool(settings["appearance"].get("dark_theme", False))
     last_clicked_wl = None  # último pico clicado (para copiar)
     last_clicked_int = None
     fit_info = None  # Informações do ajuste: (modelo, params, r², fwhm)
     selected_range = None  # Região selecionada para ajuste: (wl_min, wl_max) ou None
-    span_selector = None  # Widget de seleção de região
+    span_selector = None  # Widget de seleção de região (fit_curve)
+    span_selector_range = None  # Widget de seleção de range de exibição
 
     # Figura matplotlib embutida
     fig = Figure(figsize=(8, 4), dpi=100)
@@ -715,7 +733,7 @@ def main():
     lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 4))
 
     def carregar_arquivos():
-        nonlocal spectra_data, current_index, show_power_db
+        nonlocal spectra_data, display_ranges, current_index, show_power_db
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivo(s) de espectro",
             filetypes=[
@@ -741,6 +759,8 @@ def main():
         if not spectra_data:
             messagebox.showwarning("Aviso", "Nenhum espectro válido carregado.")
             return
+        # Reset dos recortes (paralelo a spectra_data)
+        display_ranges = [None] * len(spectra_data)
         current_index = 0
 
         # Auto-ativa "Potência (dB)" quando algum arquivo já vem em escala log
@@ -761,7 +781,7 @@ def main():
         atualizar_grafico()
 
     def atualizar_grafico():
-        nonlocal last_clicked_wl, last_clicked_int, fit_info, span_selector, selected_range
+        nonlocal last_clicked_wl, last_clicked_int, fit_info, span_selector, span_selector_range, selected_range
         if not spectra_data:
             ax.clear()
             ax.set_xlabel("Comprimento de onda (nm)")
@@ -820,6 +840,15 @@ def main():
             fit_info = None
             status_var.set(f"Arquivo {idx + 1} / {len(spectra_data)}: {nome}")
 
+        # Recorte de exibição (per-spectrum). Só é aplicado quando o checkbox
+        # "Recortar" está ligado; o valor armazenado fica preservado pra quando
+        # o usuário voltar a ligar.
+        active_display_range = (
+            display_ranges[idx]
+            if range_crop_mode and idx < len(display_ranges)
+            else None
+        )
+
         plotar_espectro_com_picos(
             ax, wl_nm, spec,
             prominence=prominence,
@@ -831,6 +860,7 @@ def main():
             fit_data_plot=fit_curve_data,
             fit_wl=fit_curve_wl,
             selected_range=selected_range,
+            display_range=active_display_range,
             power_db=show_power_db,
             y_is_db=y_is_db,
         )
@@ -855,6 +885,29 @@ def main():
             span_selector.set_active(False)
             span_selector = None
             selected_range = None
+
+        # Idem para o seletor de range de exibição (cor distinta da seleção do fit)
+        if range_crop_mode and span_selector_range is None:
+            def onselect_range(xmin, xmax):
+                if not spectra_data:
+                    return
+                i = max(0, min(current_index, len(display_ranges) - 1))
+                display_ranges[i] = (float(min(xmin, xmax)), float(max(xmin, xmax)))
+                _atualizar_botoes_range()
+                atualizar_grafico()
+
+            span_selector_range = SpanSelector(
+                ax,
+                onselect_range,
+                "horizontal",
+                useblit=True,
+                props=dict(alpha=0.2, facecolor="orange"),
+                interactive=False,
+                drag_from_anywhere=False,
+            )
+        elif not range_crop_mode and span_selector_range is not None:
+            span_selector_range.set_active(False)
+            span_selector_range = None
         
         # Se exibir picos/vales e houver exatamente um, já mostrar suas informações
         if show_peaks and not fit_curve_enabled:
@@ -870,6 +923,14 @@ def main():
         elif not fit_curve_enabled:
             last_clicked_wl = None
             last_clicked_int = None
+
+        # Atualiza estado dos botões do grupo "Recortar" conforme o espectro
+        # corrente (range definido? quantidade de espectros abertos?).
+        try:
+            _atualizar_botoes_range()
+        except NameError:
+            pass
+
         canvas.draw_idle()
 
     def _recalc_prominence(force_default=False):
@@ -1099,6 +1160,63 @@ def main():
 
     btn_limpar_selecao = ttk.Button(fr_btn, text="Limpar seleção", command=limpar_selecao)
     toolbar_layout.append(("fit_curve", btn_limpar_selecao, dict(side=tk.LEFT, padx=2)))
+
+    # Recorte de exibição (range): seleção por mouse para restringir o xlim do
+    # espectro atual. Persiste por espectro em `display_ranges` (lista paralela
+    # a `spectra_data`); o checkbox apenas controla se o recorte é aplicado e
+    # se o SpanSelector está armado para edição.
+    def toggle_range_crop():
+        nonlocal range_crop_mode
+        range_crop_mode = var_range_crop.get()
+        _atualizar_botoes_range()
+        atualizar_grafico()
+
+    var_range_crop = tk.BooleanVar(value=range_crop_mode)
+    chk_range = ttk.Checkbutton(fr_btn, text="Recortar", variable=var_range_crop, command=toggle_range_crop)
+    toolbar_layout.append(("display_range", chk_range, dict(side=tk.LEFT, padx=(8, 4))))
+
+    def aplicar_range_a_todos():
+        if not spectra_data:
+            messagebox.showinfo("Recortar", "Nenhum espectro carregado.")
+            return
+        if len(spectra_data) < 2:
+            messagebox.showinfo("Recortar", "Apenas um espectro está aberto; nada a propagar.")
+            return
+        i = max(0, min(current_index, len(display_ranges) - 1))
+        cur = display_ranges[i]
+        if cur is None:
+            messagebox.showinfo("Recortar", "Selecione um range com o mouse antes de aplicar a todos.")
+            return
+        for k in range(len(display_ranges)):
+            display_ranges[k] = cur
+        atualizar_grafico()
+
+    btn_range_all = ttk.Button(fr_btn, text="Aplicar a todos", command=aplicar_range_a_todos)
+    toolbar_layout.append(("display_range", btn_range_all, dict(side=tk.LEFT, padx=2)))
+
+    def limpar_recorte():
+        if not spectra_data:
+            return
+        i = max(0, min(current_index, len(display_ranges) - 1))
+        display_ranges[i] = None
+        _atualizar_botoes_range()
+        atualizar_grafico()
+
+    btn_range_clear = ttk.Button(fr_btn, text="Limpar recorte", command=limpar_recorte)
+    toolbar_layout.append(("display_range", btn_range_clear, dict(side=tk.LEFT, padx=2)))
+
+    def _atualizar_botoes_range():
+        """Habilita/desabilita os botões de recorte com base no estado atual."""
+        has_data = bool(spectra_data)
+        has_range = False
+        if has_data:
+            i = max(0, min(current_index, len(display_ranges) - 1))
+            has_range = display_ranges[i] is not None
+        try:
+            btn_range_all.configure(state=("normal" if has_data and has_range and len(spectra_data) > 1 else "disabled"))
+            btn_range_clear.configure(state=("normal" if has_data and has_range else "disabled"))
+        except tk.TclError:
+            pass
 
     # Sensibilidade (prominência)
     def on_prominence_change(val=None):

@@ -21,6 +21,7 @@ Permite carregar um ou vários arquivos de espectro (formato `wavelength;intensi
   - FWHM (largura à meia altura)
   - R² (qualidade do ajuste)
 - **Seleção de região** com o mouse (arrastar sobre o gráfico) para ajustar apenas um intervalo do espectro.
+- **Recorte de exibição (range)**: ative a checkbox "Recortar" e arraste o mouse para enquadrar o gráfico em um intervalo específico de λ. O recorte é **por espectro** (cada arquivo aberto mantém o próprio range) e o botão **Aplicar a todos** propaga o range atual para todos os espectros carregados. **Limpar recorte** zera só o atual; desligar o checkbox volta à vista completa preservando o range armazenado.
 
 ## Formato dos arquivos de entrada
 
@@ -93,18 +94,20 @@ python peaks_viewer.py
 4. Marque **Gradiente de cores** para preencher a área sob a curva com as cores do espectro visível.
 5. Marque **Potência (dB)** para visualizar em escala logarítmica.
 6. Marque **Ajustar curva**, escolha **gaussian** ou **lorentzian** e, opcionalmente, arraste o mouse sobre o gráfico para restringir o ajuste a uma região.
-7. Clique em um pico e use **Copiar λ** ou **Copiar I** para copiar os valores.
+7. Marque **Recortar** e arraste o mouse para enquadrar o gráfico num intervalo de λ; com vários arquivos abertos, use **Aplicar a todos** para propagar o mesmo range, ou **Limpar recorte** para reverter ao espectro inteiro.
+8. Clique em um pico e use **Copiar λ** ou **Copiar I** para copiar os valores.
 
 ## Configurações persistentes
 
 O botão **⚙ Configurações** no canto direito da barra abre um modal com três abas:
 
 - **Interface**: mostra/oculta cada grupo de controles da barra (navegação,
-  picos, gradiente, dB, ajuste de curva, prominência, botões de copiar).
-  Aplicado imediatamente.
+  picos, modo vale, gradiente, dB, ajuste de curva, recorte de exibição,
+  prominência, botões de copiar). Aplicado imediatamente.
 - **Comportamento**: estados iniciais ao abrir o programa (qual checkbox já
-  vem ligado, qual modelo de ajuste padrão), e o auto-ativar de "Potência (dB)"
-  quando dados em escala log são detectados.
+  vem ligado — inclusive *Modo vale* e *Recortar* —, qual modelo de ajuste
+  padrão), e o auto-ativar de "Potência (dB)" quando dados em escala log são
+  detectados.
 - **Aparência**: tema escuro do gráfico e tamanho inicial da janela.
 
 As preferências são gravadas em **`~/.peaksviewer/settings.json`** (Windows:
@@ -124,6 +127,7 @@ Exemplo de `settings.json`:
     "gradient": false,
     "power_db": true,
     "fit_curve": true,
+    "display_range": true,
     "prominence": true,
     "copy_buttons": false
   },
@@ -133,6 +137,7 @@ Exemplo de `settings.json`:
     "show_gradient": false,
     "show_power_db": false,
     "fit_curve_enabled": false,
+    "range_crop_mode": false,
     "fit_model": "lorentzian",
     "auto_enable_db_when_detected": true
   },
