@@ -78,6 +78,13 @@ def _default_settings():
             "fit_model": "gaussian",
             "auto_enable_db_when_detected": True,
             "keyboard_navigation": True,
+            # "auto": cada espectro usa seu próprio min/max de λ (comportamento
+            # padrão); "manual": ao carregar arquivos, todos os espectros são
+            # inicializados com (spectral_range_min, spectral_range_max) e o
+            # checkbox "Recortar" é ligado automaticamente.
+            "spectral_range_mode": "auto",
+            "spectral_range_min": 400.0,
+            "spectral_range_max": 1700.0,
         },
         "appearance": {
             "dark_theme": False,
@@ -600,6 +607,52 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         variable=var_kbd_nav,
     ).pack(anchor=tk.W, padx=24, pady=2)
 
+    ttk.Separator(tab_def, orient="horizontal").pack(fill=tk.X, padx=12, pady=10)
+
+    ttk.Label(tab_def, text="Range espectral (aplicado ao carregar arquivos):", foreground="gray").pack(anchor=tk.W, padx=12, pady=(0, 4))
+
+    var_sp_mode = tk.StringVar(value=settings["defaults"].get("spectral_range_mode", "auto"))
+    if var_sp_mode.get() not in ("auto", "manual"):
+        var_sp_mode.set("auto")
+
+    ttk.Radiobutton(
+        tab_def,
+        text="Detectar automaticamente (cada espectro usa seu próprio min/max)",
+        variable=var_sp_mode,
+        value="auto",
+    ).pack(anchor=tk.W, padx=24, pady=2)
+
+    fr_sp_man = ttk.Frame(tab_def)
+    fr_sp_man.pack(anchor=tk.W, padx=24, pady=2, fill=tk.X)
+    rb_manual = ttk.Radiobutton(
+        fr_sp_man,
+        text="Especificar manualmente (nm):",
+        variable=var_sp_mode,
+        value="manual",
+    )
+    rb_manual.pack(side=tk.LEFT)
+    var_sp_min = tk.StringVar(value=f"{float(settings['defaults'].get('spectral_range_min', 400.0)):g}")
+    var_sp_max = tk.StringVar(value=f"{float(settings['defaults'].get('spectral_range_max', 1700.0)):g}")
+    ent_sp_min = ttk.Entry(fr_sp_man, textvariable=var_sp_min, width=8)
+    ent_sp_max = ttk.Entry(fr_sp_man, textvariable=var_sp_max, width=8)
+    ttk.Label(fr_sp_man, text="  min:").pack(side=tk.LEFT)
+    ent_sp_min.pack(side=tk.LEFT, padx=(2, 6))
+    ttk.Label(fr_sp_man, text="max:").pack(side=tk.LEFT)
+    ent_sp_max.pack(side=tk.LEFT, padx=(2, 0))
+
+    def _sync_sp_entries(*_):
+        # Habilita as entries só quando "manual" está selecionado, pra deixar
+        # claro qual é o modo ativo.
+        state = "normal" if var_sp_mode.get() == "manual" else "disabled"
+        try:
+            ent_sp_min.configure(state=state)
+            ent_sp_max.configure(state=state)
+        except tk.TclError:
+            pass
+
+    var_sp_mode.trace_add("write", _sync_sp_entries)
+    _sync_sp_entries()
+
     # ----- Tab 3: Aparência -----
     tab_apa = ttk.Frame(nb)
     nb.add(tab_apa, text="Aparência")
@@ -634,6 +687,9 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         var_fit_model.set(defaults["defaults"]["fit_model"])
         var_auto_db.set(defaults["defaults"]["auto_enable_db_when_detected"])
         var_kbd_nav.set(defaults["defaults"]["keyboard_navigation"])
+        var_sp_mode.set(defaults["defaults"]["spectral_range_mode"])
+        var_sp_min.set(f"{float(defaults['defaults']['spectral_range_min']):g}")
+        var_sp_max.set(f"{float(defaults['defaults']['spectral_range_max']):g}")
         var_dark.set(defaults["appearance"]["dark_theme"])
         var_geom.set(defaults["appearance"]["window_geometry"])
 
@@ -646,6 +702,22 @@ def _abrir_modal_configuracoes(root, settings, on_apply):
         settings["defaults"]["fit_model"] = var_fit_model.get()
         settings["defaults"]["auto_enable_db_when_detected"] = bool(var_auto_db.get())
         settings["defaults"]["keyboard_navigation"] = bool(var_kbd_nav.get())
+        # Range espectral: persiste o modo e tenta interpretar min/max como
+        # float. Se a digitação ficou inválida, mantemos o valor antigo (não
+        # crasha; só ignora o campo ruim).
+        sp_mode = var_sp_mode.get() if var_sp_mode.get() in ("auto", "manual") else "auto"
+        settings["defaults"]["spectral_range_mode"] = sp_mode
+        for key, var in (("spectral_range_min", var_sp_min), ("spectral_range_max", var_sp_max)):
+            try:
+                settings["defaults"][key] = float(str(var.get()).replace(",", "."))
+            except ValueError:
+                pass
+        # Garante min < max; caso contrário, faz swap silencioso.
+        if settings["defaults"]["spectral_range_min"] > settings["defaults"]["spectral_range_max"]:
+            settings["defaults"]["spectral_range_min"], settings["defaults"]["spectral_range_max"] = (
+                settings["defaults"]["spectral_range_max"],
+                settings["defaults"]["spectral_range_min"],
+            )
         settings["appearance"]["dark_theme"] = bool(var_dark.get())
         # Validação simples para a geometria (ex.: "900x550")
         geom_txt = var_geom.get().strip()
@@ -720,6 +792,16 @@ def main():
     fit_curve_enabled = bool(settings["defaults"].get("fit_curve_enabled", False))
     range_crop_mode = bool(settings["defaults"].get("range_crop_mode", False))
     keyboard_nav_enabled = bool(settings["defaults"].get("keyboard_navigation", True))
+    # Range espectral default ao carregar arquivos: "auto" preserva o
+    # comportamento histórico (cada espectro usa seu próprio min/max);
+    # "manual" pré-popula display_ranges com (sp_min, sp_max) e força
+    # range_crop_mode=True. Validação tolerante: qualquer valor diferente
+    # cai em "auto".
+    spectral_range_mode = settings["defaults"].get("spectral_range_mode", "auto")
+    if spectral_range_mode not in ("auto", "manual"):
+        spectral_range_mode = "auto"
+    spectral_range_min = float(settings["defaults"].get("spectral_range_min", 400.0))
+    spectral_range_max = float(settings["defaults"].get("spectral_range_max", 1700.0))
     fit_model = str(settings["defaults"].get("fit_model", "gaussian"))
     dark_theme = bool(settings["appearance"].get("dark_theme", False))
     last_clicked_wl = None  # último pico clicado (para copiar)
@@ -744,7 +826,7 @@ def main():
     lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 4))
 
     def carregar_arquivos():
-        nonlocal spectra_data, display_ranges, current_index, show_power_db
+        nonlocal spectra_data, display_ranges, current_index, show_power_db, range_crop_mode
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivo(s) de espectro",
             filetypes=[
@@ -770,8 +852,21 @@ def main():
         if not spectra_data:
             messagebox.showwarning("Aviso", "Nenhum espectro válido carregado.")
             return
-        # Reset dos recortes (paralelo a spectra_data)
-        display_ranges = [None] * len(spectra_data)
+        # Inicializa display_ranges segundo o modo do range espectral:
+        #   - "manual": todos os espectros já entram com (sp_min, sp_max) e o
+        #     checkbox "Recortar" é ligado pra deixar o recorte aplicado.
+        #   - "auto":   cada espectro segue mostrando seu próprio min/max.
+        if spectral_range_mode == "manual":
+            lo = float(min(spectral_range_min, spectral_range_max))
+            hi = float(max(spectral_range_min, spectral_range_max))
+            display_ranges = [(lo, hi) for _ in spectra_data]
+            range_crop_mode = True
+            try:
+                var_range_crop.set(True)
+            except (NameError, tk.TclError):
+                pass
+        else:
+            display_ranges = [None] * len(spectra_data)
         current_index = 0
 
         # Auto-ativa "Potência (dB)" quando algum arquivo já vem em escala log
@@ -1296,9 +1391,37 @@ def main():
 
     def aplicar_settings_runtime():
         """Aplica em tempo real os settings que afetam o estado vivo."""
-        nonlocal dark_theme, keyboard_nav_enabled
+        nonlocal dark_theme, keyboard_nav_enabled, spectral_range_mode
+        nonlocal spectral_range_min, spectral_range_max, range_crop_mode
+        nonlocal display_ranges
         dark_theme = bool(settings["appearance"].get("dark_theme", False))
         keyboard_nav_enabled = bool(settings["defaults"].get("keyboard_navigation", True))
+
+        # Re-aplica o range espectral em todos os espectros já carregados.
+        # Em "manual": força (sp_min, sp_max) em cada item, sobrescrevendo
+        # ajustes pontuais do usuário (é a intenção explícita do modal); e
+        # liga o checkbox Recortar pra deixar o recorte visível.
+        # Em "auto": limpa todos os ranges armazenados, voltando à vista
+        # completa de cada espectro.
+        new_mode = settings["defaults"].get("spectral_range_mode", "auto")
+        if new_mode not in ("auto", "manual"):
+            new_mode = "auto"
+        spectral_range_mode = new_mode
+        spectral_range_min = float(settings["defaults"].get("spectral_range_min", 400.0))
+        spectral_range_max = float(settings["defaults"].get("spectral_range_max", 1700.0))
+
+        if spectra_data:
+            if spectral_range_mode == "manual":
+                lo = float(min(spectral_range_min, spectral_range_max))
+                hi = float(max(spectral_range_min, spectral_range_max))
+                display_ranges = [(lo, hi) for _ in spectra_data]
+                range_crop_mode = True
+                try:
+                    var_range_crop.set(True)
+                except tk.TclError:
+                    pass
+            else:
+                display_ranges = [None] * len(spectra_data)
 
     btn_configuracoes = ttk.Button(fr_btn, text="⚙ Configurações", command=abrir_configuracoes)
 

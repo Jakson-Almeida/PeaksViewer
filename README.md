@@ -107,8 +107,12 @@ O botão **⚙ Configurações** no canto direito da barra abre um modal com tr�
 - **Comportamento**: estados iniciais ao abrir o programa (qual checkbox já
   vem ligado — inclusive *Modo vale* e *Recortar* —, qual modelo de ajuste
   padrão), o auto-ativar de "Potência (dB)" quando dados em escala log são
-  detectados, e o switch *Habilitar navegação por teclado entre espectros*
-  (desligue para ignorar `←/→`, `<>`, `,`/`.`, `-`/`+`, `PgUp`/`PgDn`).
+  detectados, o switch *Habilitar navegação por teclado entre espectros*
+  (desligue para ignorar `←/→`, `<>`, `,`/`.`, `-`/`+`, `PgUp`/`PgDn`), e o
+  **Range espectral** aplicado ao carregar arquivos: *Detectar automaticamente*
+  (cada espectro usa seu próprio min/max — comportamento padrão) ou
+  *Especificar manualmente* (todos os espectros entram com o intervalo
+  `(min, max)` configurado em nm e o checkbox "Recortar" é ligado).
 - **Aparência**: tema escuro do gráfico e tamanho inicial da janela.
 
 As preferências são gravadas em **`~/.peaksviewer/settings.json`** (Windows:
@@ -141,7 +145,10 @@ Exemplo de `settings.json`:
     "range_crop_mode": false,
     "fit_model": "lorentzian",
     "auto_enable_db_when_detected": true,
-    "keyboard_navigation": true
+    "keyboard_navigation": true,
+    "spectral_range_mode": "manual",
+    "spectral_range_min": 1500.0,
+    "spectral_range_max": 1600.0
   },
   "appearance": {
     "dark_theme": false,
